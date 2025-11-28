@@ -1,0 +1,46 @@
+{
+  "name": "denied-sdk",
+  "version": "0.1.0",
+  "description": "Denied SDK for TypeScript",
+  "keywords": [
+    "denied",
+    "sdk",
+    "typescript",
+    "authorization"
+  ],
+  "homepage": "https://github.com/denied-dev/denied-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/denied-dev/denied-sdk/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/denied-dev/denied-sdk.git",
+    "directory": "typescript"
+  },
+  "license": "Apache-2.0",
+  "author": "Denied team",
+  "type": "commonjs",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "./dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint src/**/*.ts",
+    "prepublishOnly": "pnpm run build"
+  },
+  "dependencies": {
+    "axios": "^1.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "@typescript-eslint/eslint-plugin": "^8.28.0",
+    "@typescript-eslint/parser": "^8.28.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.8.0"
+  }
+}
