@@ -1,13 +1,12 @@
 from denied_sdk import (
     CheckRequest,
     DeniedClient,
-    EntityType,
     PrincipalCheck,
     ResourceCheck,
 )
 
 # Initialize client
-client = DeniedClient(url="http://localhost:8080")
+client = DeniedClient(url="http://localhost:8421")
 
 # Example 1: Simple check with URIs
 result = client.check(

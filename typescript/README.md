@@ -126,7 +126,7 @@ new DeniedClient(options?: DeniedClientOptions)
 ```
 
 **Options:**
-- `url` (string, optional): The base URL of the Denied server. Defaults to `process.env.DENIED_URL` or `"http://localhost:8080"`
+- `url` (string, optional): The base URL of the Denied server. Defaults to `process.env.DENIED_URL` or `"http://localhost:8421"`
 - `apiKey` (string, optional): The API key for authentication. Defaults to `process.env.DENIED_API_KEY`
 
 #### Methods

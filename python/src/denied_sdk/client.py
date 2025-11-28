@@ -2,7 +2,6 @@ import os
 
 import httpx
 
-from .enums import EntityType
 from .schemas import CheckRequest, CheckResponse, PrincipalCheck, ResourceCheck
 
 
@@ -13,18 +12,32 @@ class DeniedClient:
     This client provides methods to check permissions for principals
     performing actions on resources.
 
+    The client should be used as a context manager to ensure proper cleanup
+    of the underlying HTTP connection pool:
+
+        with DeniedClient() as client:
+            response = client.check(...)
+
+    Alternatively, call close() manually when done:
+
+        client = DeniedClient()
+        try:
+            response = client.check(...)
+        finally:
+            client.close()
+
     Parameters
     ----------
     url : str, optional
         The base URL of the Denied server.
-        Defaults to environment variable "DENIED_URL" or "http://localhost:8080".
+        Defaults to environment variable "DENIED_URL" or "http://localhost:8421".
     api_key : str, optional
         The API key for authenticating with the server.
         Defaults to environment variable "DENIED_API_KEY" if not provided.
     """
 
     def __init__(self, url: str | None = None, api_key: str | None = None) -> None:
-        self._url = url if url is not None else os.getenv("DENIED_URL") or "http://localhost:8080"
+        self._url = url if url is not None else os.getenv("DENIED_URL") or "http://localhost:8421"
         self._api_key = api_key if api_key is not None else os.getenv("DENIED_API_KEY")
 
         headers = {}
@@ -32,6 +45,23 @@ class DeniedClient:
             headers["x-api-key"] = self._api_key
 
         self.client = httpx.Client(base_url=self._url, headers=headers, timeout=60.0)
+
+    def __enter__(self) -> "DeniedClient":
+        """Enter the context manager."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Exit the context manager and close the client."""
+        self.close()
+
+    def close(self) -> None:
+        """
+        Close the underlying HTTP client and release resources.
+
+        This method should be called when the client is no longer needed
+        to properly clean up the connection pool.
+        """
+        self.client.close()
 
     def _handle_response(self, response: httpx.Response) -> None:
         """
@@ -104,7 +134,7 @@ class DeniedClient:
         )
         response = self.client.post("/check", json=request.model_dump())
         self._handle_response(response)
-        return CheckResponse.from_dict(response.json())
+        return CheckResponse.model_validate(response.json())
 
     def bulk_check(
         self, check_requests: list[CheckRequest]
@@ -133,5 +163,5 @@ class DeniedClient:
         )
         self._handle_response(response)
         return [
-            CheckResponse.from_dict(result) for result in response.json()
+            CheckResponse.model_validate(result) for result in response.json()
         ]

@@ -3,7 +3,7 @@ import { CheckRequest, EntityType, DeniedClient } from "denied-sdk";
 
 async function run(): Promise<void> {
   const client = new DeniedClient({
-    url: "http://localhost:8080",
+    url: "http://localhost:8421",
     apiKey: "your-api-key-here",
   });
 

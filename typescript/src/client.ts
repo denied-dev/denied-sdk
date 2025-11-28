@@ -1,9 +1,6 @@
 import axios, { AxiosInstance, AxiosResponse } from "axios";
-import {
-  CheckRequest,
-  CheckResponse,
-  EntityType,
-} from "./index";
+import type { CheckRequest, CheckResponse } from "./schemas";
+import { EntityType } from "./enums";
 
 /**
  * Options for configuring the DeniedClient
@@ -25,11 +22,11 @@ export class DeniedClient {
    * Creates a new DeniedClient instance.
    *
    * @param options - Configuration options for the client
-   * @param options.url - The base URL of the Denied server (defaults to process.env.DENIED_URL or "http://localhost:8080")
+   * @param options.url - The base URL of the Denied server (defaults to process.env.DENIED_URL or "http://localhost:8421")
    * @param options.apiKey - The API key for authenticating with the server (defaults to process.env.DENIED_API_KEY)
    */
   constructor(options: DeniedClientOptions = {}) {
-    this.url = options.url || process.env.DENIED_URL || "http://localhost:8080";
+    this.url = options.url || process.env.DENIED_URL || "http://localhost:8421";
     this.apiKey = options.apiKey || process.env.DENIED_API_KEY;
 
     const headers: Record<string, string> = {};
@@ -68,8 +65,8 @@ export class DeniedClient {
   async check(options: {
     principalUri?: string;
     resourceUri?: string;
-    principalAttributes?: Record<string, string>;
-    resourceAttributes?: Record<string, string>;
+    principalAttributes?: Record<string, any>;
+    resourceAttributes?: Record<string, any>;
     action?: string;
   }): Promise<CheckResponse> {
     const request: CheckRequest = {
