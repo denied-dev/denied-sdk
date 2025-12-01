@@ -86,10 +86,13 @@ export class DeniedClient {
     try {
       const response = await this.client.post<CheckResponse>("/check", request);
       return this.handleResponse(response);
-    } catch (error) {
-      if (axios.isAxiosError(error) && error.response) {
+    } catch (error: any) {
+      if (error.response && error.response.status) {
+        const data = error.response.data
+          ? JSON.stringify(error.response.data)
+          : "";
         throw new Error(
-          `HTTP ${error.response.status}: ${JSON.stringify(error.response.data)}`,
+          `HTTP ${error.response.status}${data ? ": " + data : ""}`,
         );
       }
       throw error;
@@ -109,10 +112,13 @@ export class DeniedClient {
         checkRequests,
       );
       return this.handleResponse(response);
-    } catch (error) {
-      if (axios.isAxiosError(error) && error.response) {
+    } catch (error: any) {
+      if (error.response && error.response.status) {
+        const data = error.response.data
+          ? JSON.stringify(error.response.data)
+          : "";
         throw new Error(
-          `HTTP ${error.response.status}: ${JSON.stringify(error.response.data)}`,
+          `HTTP ${error.response.status}${data ? ": " + data : ""}`,
         );
       }
       throw error;
