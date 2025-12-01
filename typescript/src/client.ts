@@ -88,12 +88,8 @@ export class DeniedClient {
       return this.handleResponse(response);
     } catch (error: any) {
       if (error.response && error.response.status) {
-        const data = error.response.data
-          ? JSON.stringify(error.response.data)
-          : "";
-        throw new Error(
-          `HTTP ${error.response.status}${data ? ": " + data : ""}`,
-        );
+        const data = error.response.data ? JSON.stringify(error.response.data) : "";
+        throw new Error(`HTTP ${error.response.status}${data ? ": " + data : ""}`);
       }
       throw error;
     }
@@ -114,12 +110,8 @@ export class DeniedClient {
       return this.handleResponse(response);
     } catch (error: any) {
       if (error.response && error.response.status) {
-        const data = error.response.data
-          ? JSON.stringify(error.response.data)
-          : "";
-        throw new Error(
-          `HTTP ${error.response.status}${data ? ": " + data : ""}`,
-        );
+        const data = error.response.data ? JSON.stringify(error.response.data) : "";
+        throw new Error(`HTTP ${error.response.status}${data ? ": " + data : ""}`);
       }
       throw error;
     }
