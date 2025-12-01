@@ -1,0 +1,134 @@
+name: Quality Checks
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  py-style:
+    name: Python - Code Style
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.5.11"
+          enable-cache: true
+
+      - name: Install dependencies
+        working-directory: ./python
+        run: uv pip install --system ruff
+
+      - name: Run ruff check
+        working-directory: ./python
+        run: ruff check .
+
+      - name: Run ruff format check
+        working-directory: ./python
+        run: ruff format --check .
+
+  py-test:
+    name: Python - Tests
+    runs-on: ubuntu-latest
+    needs: [py-style]
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.5.11"
+          enable-cache: true
+
+      - name: Install dependencies
+        working-directory: ./python
+        run: uv sync --extra dev
+
+      - name: Run tests
+        working-directory: ./python
+        run: uv run pytest
+
+  ts-style:
+    name: TypeScript - Code Style
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+          cache-dependency-path: typescript/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: ./typescript
+        run: pnpm install --frozen-lockfile
+
+      - name: Run ESLint
+        working-directory: ./typescript
+        run: pnpm run lint
+
+      - name: Run Prettier check
+        working-directory: ./typescript
+        run: pnpm run format:check
+
+  ts-test:
+    name: TypeScript - Tests
+    runs-on: ubuntu-latest
+    needs: [ts-style]
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["18", "20", "22"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "pnpm"
+          cache-dependency-path: typescript/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: ./typescript
+        run: pnpm install --frozen-lockfile
+
+      - name: Run tests
+        working-directory: ./typescript
+        run: pnpm run test
+
+      - name: Build package
+        working-directory: ./typescript
+        run: pnpm run build

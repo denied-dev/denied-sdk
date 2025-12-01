@@ -1,4 +1,4 @@
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -8,10 +8,10 @@ from denied_sdk.enums.entity import EntityType
 class EntityCheck(BaseModel):
     """Base class for entity checks in authorization requests."""
 
-    uri: Optional[str] = Field(
+    uri: str | None = Field(
         default=None, description="Unique identifier for the entity"
     )
-    attributes: Optional[dict[str, Any]] = Field(
+    attributes: dict[str, Any] | None = Field(
         default_factory=dict, description="Entity attributes"
     )
     type: EntityType = Field(..., description="Type of entity")
@@ -20,7 +20,8 @@ class EntityCheck(BaseModel):
     def either_uri_or_attributes(self) -> "EntityCheck":
         """Ensure either uri or non-empty attributes is provided."""
         if not self.uri and not self.attributes:
-            raise ValueError("Either 'uri' or non-empty 'attributes' must be provided")
+            message = "Either 'uri' or non-empty 'attributes' must be provided"
+            raise ValueError(message)
         return self
 
 
@@ -52,7 +53,7 @@ class CheckResponse(BaseModel):
     """Response from an authorization check."""
 
     allowed: bool = Field(..., description="Whether the action is allowed")
-    reason: Optional[str] = Field(None, description="The reason for the decision")
-    rules: Optional[list[str]] = Field(
+    reason: str | None = Field(None, description="The reason for the decision")
+    rules: list[str] | None = Field(
         None, description="The rules that triggered the decision"
     )

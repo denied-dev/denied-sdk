@@ -37,7 +37,11 @@ class DeniedClient:
     """
 
     def __init__(self, url: str | None = None, api_key: str | None = None) -> None:
-        self._url = url if url is not None else os.getenv("DENIED_URL") or "http://localhost:8421"
+        self._url = (
+            url
+            if url is not None
+            else os.getenv("DENIED_URL") or "http://localhost:8421"
+        )
         self._api_key = api_key if api_key is not None else os.getenv("DENIED_API_KEY")
 
         headers = {}
@@ -80,8 +84,9 @@ class DeniedClient:
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
+            message = f"{e}\nResponse: {e.response.text}"
             raise httpx.HTTPStatusError(
-                f"{e}\nResponse: {e.response.text}",
+                message,
                 request=e.request,
                 response=e.response,
             ) from None
@@ -136,9 +141,7 @@ class DeniedClient:
         self._handle_response(response)
         return CheckResponse.model_validate(response.json())
 
-    def bulk_check(
-        self, check_requests: list[CheckRequest]
-    ) -> list[CheckResponse]:
+    def bulk_check(self, check_requests: list[CheckRequest]) -> list[CheckResponse]:
         """
         Perform a set of permission checks in a single request.
 
@@ -162,6 +165,4 @@ class DeniedClient:
             json=[request.model_dump() for request in check_requests],
         )
         self._handle_response(response)
-        return [
-            CheckResponse.model_validate(result) for result in response.json()
-        ]
+        return [CheckResponse.model_validate(result) for result in response.json()]
