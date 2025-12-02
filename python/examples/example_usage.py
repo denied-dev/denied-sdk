@@ -51,4 +51,4 @@ requests = [
 ]
 results = client.bulk_check(requests)
 for i, result in enumerate(results):
-    print(f"Check {i+1}: {result.allowed}")
+    print(f"Check {i + 1}: {result.allowed}")

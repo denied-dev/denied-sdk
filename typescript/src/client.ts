@@ -65,8 +65,8 @@ export class DeniedClient {
   async check(options: {
     principalUri?: string;
     resourceUri?: string;
-    principalAttributes?: Record<string, any>;
-    resourceAttributes?: Record<string, any>;
+    principalAttributes?: Record<string, unknown>;
+    resourceAttributes?: Record<string, unknown>;
     action?: string;
   }): Promise<CheckResponse> {
     const request: CheckRequest = {
@@ -84,16 +84,12 @@ export class DeniedClient {
     };
 
     try {
-      const response = await this.client.post<CheckResponse>(
-        "/check",
-        request,
-      );
+      const response = await this.client.post<CheckResponse>("/check", request);
       return this.handleResponse(response);
-    } catch (error) {
-      if (axios.isAxiosError(error) && error.response) {
-        throw new Error(
-          `HTTP ${error.response.status}: ${JSON.stringify(error.response.data)}`,
-        );
+    } catch (error: any) {
+      if (error.response && error.response.status) {
+        const data = error.response.data ? JSON.stringify(error.response.data) : "";
+        throw new Error(`HTTP ${error.response.status}${data ? ": " + data : ""}`);
       }
       throw error;
     }
@@ -112,11 +108,10 @@ export class DeniedClient {
         checkRequests,
       );
       return this.handleResponse(response);
-    } catch (error) {
-      if (axios.isAxiosError(error) && error.response) {
-        throw new Error(
-          `HTTP ${error.response.status}: ${JSON.stringify(error.response.data)}`,
-        );
+    } catch (error: any) {
+      if (error.response && error.response.status) {
+        const data = error.response.data ? JSON.stringify(error.response.data) : "";
+        throw new Error(`HTTP ${error.response.status}${data ? ": " + data : ""}`);
       }
       throw error;
     }

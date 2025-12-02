@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { EntityType } from "./enums";
 
 /**
@@ -6,7 +5,7 @@ import { EntityType } from "./enums";
  */
 export interface EntityCheck {
   uri?: string;
-  attributes?: Record<string, any>;
+  attributes?: Record<string, unknown>;
   type: EntityType;
 }
 
