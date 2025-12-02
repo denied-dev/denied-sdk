@@ -1,0 +1,246 @@
+"""Tests for ContextMapper."""
+
+from unittest.mock import Mock
+
+import pytest
+
+from integrations.adk.config import AuthorizationConfig
+from integrations.adk.context_mapper import ContextMapper
+
+
+@pytest.fixture
+def config():
+    """Create a default config."""
+    return AuthorizationConfig()
+
+
+@pytest.fixture
+def mapper(config):
+    """Create a context mapper."""
+    return ContextMapper(config)
+
+
+@pytest.fixture
+def mock_tool_context():
+    """Create a mock ToolContext."""
+    context = Mock()
+    context.user_id = "alice"
+    context.agent_name = "file_agent"
+    context.session.id = "session-123"
+    context.invocation_id = "invocation-456"
+    context.state = {"role": "admin", "department": "engineering"}
+    return context
+
+
+@pytest.fixture
+def mock_tool():
+    """Create a mock tool."""
+    tool = Mock()
+    tool.name = "write_file"
+    tool.description = "Write content to a file"
+    tool.custom_metadata = None
+    return tool
+
+
+def test_extract_principal(mapper, mock_tool_context):
+    """Test extracting principal from tool context."""
+    principal = mapper.extract_principal(mock_tool_context)
+
+    assert principal.uri == "user:alice"
+    assert principal.attributes["user_id"] == "alice"
+    assert principal.attributes["agent_name"] == "file_agent"
+    assert principal.attributes["session_id"] == "session-123"
+    assert principal.attributes["invocation_id"] == "invocation-456"
+    assert principal.attributes["role"] == "admin"
+    assert principal.attributes["department"] == "engineering"
+
+
+def test_extract_principal_no_role(mapper):
+    """Test extracting principal without role in state."""
+    context = Mock()
+    context.user_id = "bob"
+    context.agent_name = "api_agent"
+    context.session.id = "session-789"
+    context.invocation_id = "invocation-012"
+    context.state = {}  # No role or department
+
+    principal = mapper.extract_principal(context)
+
+    assert principal.uri == "user:bob"
+    assert "role" not in principal.attributes
+    assert "department" not in principal.attributes
+
+
+def test_extract_resource(mapper, mock_tool):
+    """Test extracting resource from tool."""
+    tool_args = {"file_path": "/etc/passwd", "content": "secret"}
+
+    resource = mapper.extract_resource(mock_tool, tool_args)
+
+    assert resource.uri == "tool:write_file"
+    assert resource.attributes["tool_name"] == "write_file"
+    assert resource.attributes["tool_description"] == "Write content to a file"
+    assert resource.attributes["file_path"] == "/etc/passwd"
+    # content should not be extracted (not in resource_arg_names)
+
+
+def test_extract_resource_with_metadata(mapper):
+    """Test extracting resource with custom metadata."""
+    tool = Mock()
+    tool.name = "api_call"
+    tool.description = "Call external API"
+    tool.custom_metadata = {"api_version": "v2", "auth_required": True}
+
+    resource = mapper.extract_resource(tool, {})
+
+    assert resource.uri == "tool:api_call"
+    assert resource.attributes["api_version"] == "v2"
+    assert resource.attributes["auth_required"] is True
+
+
+def test_extract_resource_various_args(mapper, mock_tool):
+    """Test extracting different resource argument names."""
+    tool_args = {
+        "resource_id": "res-123",
+        "document_id": "doc-456",
+        "path": "/var/log/app.log",
+        "other_arg": "not-extracted",
+    }
+
+    resource = mapper.extract_resource(mock_tool, tool_args)
+
+    assert resource.attributes["resource_id"] == "res-123"
+    assert resource.attributes["document_id"] == "doc-456"
+    assert resource.attributes["path"] == "/var/log/app.log"
+    assert "other_arg" not in resource.attributes
+
+
+def test_extract_action_read_pattern(mapper):
+    """Test action extraction for read verbs."""
+    tool = Mock()
+
+    tool.name = "read_file"
+    assert mapper.extract_action(tool) == "read"
+
+    tool.name = "get_user"
+    assert mapper.extract_action(tool) == "read"
+
+    tool.name = "fetch_data"
+    assert mapper.extract_action(tool) == "read"
+
+    tool.name = "list_items"
+    assert mapper.extract_action(tool) == "read"
+
+
+def test_extract_action_write_pattern(mapper):
+    """Test action extraction for write verbs."""
+    tool = Mock()
+
+    tool.name = "write_file"
+    assert mapper.extract_action(tool) == "write"
+
+    tool.name = "create_user"
+    assert mapper.extract_action(tool) == "write"
+
+    tool.name = "add_item"
+    assert mapper.extract_action(tool) == "write"
+
+
+def test_extract_action_update_pattern(mapper):
+    """Test action extraction for update verbs."""
+    tool = Mock()
+
+    tool.name = "update_record"
+    assert mapper.extract_action(tool) == "update"
+
+    tool.name = "modify_settings"
+    assert mapper.extract_action(tool) == "update"
+
+    tool.name = "edit_document"
+    assert mapper.extract_action(tool) == "update"
+
+
+def test_extract_action_delete_pattern(mapper):
+    """Test action extraction for delete verbs."""
+    tool = Mock()
+
+    tool.name = "delete_file"
+    assert mapper.extract_action(tool) == "delete"
+
+    tool.name = "remove_user"
+    assert mapper.extract_action(tool) == "delete"
+
+
+def test_extract_action_execute_pattern(mapper):
+    """Test action extraction for execute verbs."""
+    tool = Mock()
+
+    tool.name = "execute_command"
+    assert mapper.extract_action(tool) == "execute"
+
+    tool.name = "run_script"
+    assert mapper.extract_action(tool) == "execute"
+
+
+def test_extract_action_no_match(mapper):
+    """Test action extraction when no pattern matches."""
+    tool = Mock()
+
+    tool.name = "calculate_total"
+    assert mapper.extract_action(tool) == "execute"
+
+    tool.name = "process_data"
+    assert mapper.extract_action(tool) == "execute"
+
+
+def test_create_check_request(mapper, mock_tool, mock_tool_context):
+    """Test creating a complete check request."""
+    tool_args = {"file_path": "/home/user/data.txt"}
+
+    request = mapper.create_check_request(mock_tool, tool_args, mock_tool_context)
+
+    # Check principal
+    assert request.principal.uri == "user:alice"
+    assert request.principal.attributes["role"] == "admin"
+
+    # Check resource
+    assert request.resource.uri == "tool:write_file"
+    assert request.resource.attributes["file_path"] == "/home/user/data.txt"
+
+    # Check action
+    assert request.action == "write"
+
+
+def test_config_disable_extractions():
+    """Test disabling context extractions via config."""
+    config = AuthorizationConfig(
+        include_user_id=False,
+        include_agent_name=False,
+        include_session_id=False,
+        extract_tool_args=False,
+    )
+    mapper = ContextMapper(config)
+
+    context = Mock()
+    context.user_id = "alice"
+    context.agent_name = "agent"
+    context.session.id = "session-123"
+    context.invocation_id = "inv-456"
+    context.state = {}
+
+    principal = mapper.extract_principal(context)
+
+    # Should only have invocation_id (always included)
+    assert "user_id" not in principal.attributes
+    assert "agent_name" not in principal.attributes
+    assert "session_id" not in principal.attributes
+    assert "invocation_id" in principal.attributes  # Always included
+
+    # Test tool args not extracted
+    tool = Mock()
+    tool.name = "test_tool"
+    tool.description = "Test"
+    tool.custom_metadata = None
+
+    resource = mapper.extract_resource(tool, {"file_path": "/test"})
+    assert "file_path" not in resource.attributes
