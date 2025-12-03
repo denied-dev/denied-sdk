@@ -58,7 +58,6 @@ class AuthorizationPlugin(BasePlugin):
         super().__init__(name="denied_authorization")
 
         self.config = config or AuthorizationConfig()
-        self.config.validate()
 
         self.client = denied_client or AsyncDeniedClient(
             url=self.config.denied_url,

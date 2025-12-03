@@ -1,10 +1,10 @@
 import os
-from dataclasses import dataclass
 from typing import Literal
 
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-@dataclass
-class AuthorizationConfig:
+
+class AuthorizationConfig(BaseModel):
     """Configuration for the Denied authorization plugin.
 
     Attributes:
@@ -23,42 +23,66 @@ class AuthorizationConfig:
         extract_tool_args: Whether to extract tool arguments into resource attributes.
     """
 
-    denied_url: str | None = None
-    denied_api_key: str | None = None
+    denied_url: str | None = Field(
+        default=None,
+        description="URL of the Denied authorization service",
+    )
+    denied_api_key: str | None = Field(
+        default=None,
+        description="API key for the Denied service",
+    )
 
     # Failure handling
-    fail_mode: Literal["closed", "open"] = "closed"
-    retry_attempts: int = 2
-    timeout_seconds: float = 5.0
+    fail_mode: Literal["closed", "open"] = Field(
+        default="closed",
+        description="How to handle authorization service failures",
+    )
+    retry_attempts: int = Field(
+        default=2,
+        ge=0,
+        description="Number of retry attempts for failed authorization checks",
+    )
+    timeout_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        description="Timeout for authorization service requests in seconds",
+    )
 
     # Context extraction
-    include_user_id: bool = True
-    include_agent_name: bool = True
-    include_session_id: bool = True
-    extract_tool_args: bool = True
+    include_user_id: bool = Field(
+        default=True,
+        description="Whether to include user_id in principal attributes",
+    )
+    include_agent_name: bool = Field(
+        default=True,
+        description="Whether to include agent name in principal attributes",
+    )
+    include_session_id: bool = Field(
+        default=True,
+        description="Whether to include session ID in principal attributes",
+    )
+    extract_tool_args: bool = Field(
+        default=True,
+        description="Whether to extract tool arguments into resource attributes",
+    )
 
-    def __post_init__(self):
+    @model_validator(mode="before")
+    @classmethod
+    def set_env_defaults(cls, values: dict) -> dict:
         """Set defaults from environment variables if not provided."""
-        if self.denied_url is None:
-            self.denied_url = os.getenv("DENIED_URL", "http://localhost:8421")
+        if values.get("denied_url") is None:
+            values["denied_url"] = os.getenv("DENIED_URL", "http://localhost:8421")
 
-        if self.denied_api_key is None:
-            self.denied_api_key = os.getenv("DENIED_API_KEY")
+        if values.get("denied_api_key") is None:
+            values["denied_api_key"] = os.getenv("DENIED_API_KEY")
 
-    def validate(self) -> None:
-        """Validate the configuration.
+        return values
 
-        Raises:
-            ValueError: If configuration is invalid.
-        """
-        if not self.denied_url:
+    @field_validator("denied_url")
+    @classmethod
+    def validate_denied_url(cls, v: str | None) -> str:
+        """Validate that denied_url is provided."""
+        if not v:
             msg = "denied_url must be provided or DENIED_URL must be set"
             raise ValueError(msg)
-
-        if self.retry_attempts < 0:
-            msg = "retry_attempts must be non-negative"
-            raise ValueError(msg)
-
-        if self.timeout_seconds <= 0:
-            msg = "timeout_seconds must be positive"
-            raise ValueError(msg)
+        return v
