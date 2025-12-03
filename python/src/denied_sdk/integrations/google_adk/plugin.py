@@ -140,8 +140,7 @@ class AuthorizationPlugin(BasePlugin):
             return self._create_denial_response(check_result.reason)
 
         logger.debug(
-            f"Authorization ALLOWED for tool={tool.name}, "
-            f"user={tool_context.user_id}"
+            f"Authorization ALLOWED for tool={tool.name}, user={tool_context.user_id}"
         )
         return None  # Allow execution
 
