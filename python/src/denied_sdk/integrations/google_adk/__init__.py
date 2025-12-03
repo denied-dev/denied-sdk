@@ -14,7 +14,8 @@ Example:
     )
 """
 
-from .async_client import AsyncDeniedClient
+from denied_sdk import AsyncDeniedClient
+
 from .config import AuthorizationConfig
 from .context_mapper import ContextMapper
 from .errors import (

@@ -2,7 +2,7 @@
 
 import pytest
 
-from denied_sdk.integrations.google_adk.async_client import AsyncDeniedClient
+from denied_sdk import AsyncDeniedClient
 from denied_sdk.schemas.check import CheckResponse
 
 
@@ -116,7 +116,7 @@ async def test_async_client_context_manager():
     client = AsyncDeniedClient()
 
     async with client:
-        assert client._client is not None
+        assert client.client is not None
 
     # Client should be closed after exiting context
-    assert client._client.client.is_closed
+    assert client.client.is_closed

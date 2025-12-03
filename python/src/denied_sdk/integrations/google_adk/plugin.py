@@ -2,17 +2,17 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
+from google.adk.plugins.base_plugin import BasePlugin
+
+from denied_sdk import AsyncDeniedClient
 from denied_sdk.schemas.check import CheckResponse
 
-from .async_client import AsyncDeniedClient
 from .config import AuthorizationConfig
 from .context_mapper import ContextMapper
 
 if TYPE_CHECKING:
     from google.adk.tools.base_tool import BaseTool
     from google.adk.tools.tool_context import ToolContext
-
-from google.adk.plugins.base_plugin import BasePlugin
 
 logger = logging.getLogger(__name__)
 

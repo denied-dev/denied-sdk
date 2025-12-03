@@ -6,7 +6,9 @@ Frictionless authorization layer for Google ADK agents. Intercepts tool calls an
 
 **1. Install:**
 ```bash
-uv sync --extra adk
+pip install "denied-sdk[adk]"
+# or with uv
+uv add "denied-sdk[adk]"
 ```
 
 **2. Add to your agent:**

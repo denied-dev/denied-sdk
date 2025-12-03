@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from denied_sdk.integrations.google_adk.async_client import AsyncDeniedClient
+from denied_sdk import AsyncDeniedClient
 from denied_sdk.integrations.google_adk.config import AuthorizationConfig
 from denied_sdk.integrations.google_adk.plugin import AuthorizationPlugin
 from denied_sdk.schemas.check import CheckResponse

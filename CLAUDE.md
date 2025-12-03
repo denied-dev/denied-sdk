@@ -17,9 +17,12 @@ Both SDKs provide identical functionality for interacting with a Denied authoriz
 The Python SDK uses `uv` for dependency management:
 
 ```bash
-# Install dependencies with dev extras
+# Install dependencies (dev dependencies are included by default)
 cd python
-uv sync --extra dev
+uv sync
+
+# Install with ADK integration
+uv sync --extra adk
 
 # Lint (check only)
 ruff check .
