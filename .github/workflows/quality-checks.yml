@@ -42,7 +42,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: ./python
-        run: uv sync --extra dev
+        run: uv sync --extra dev --extra adk
 
       - name: Run tests
         working-directory: ./python
