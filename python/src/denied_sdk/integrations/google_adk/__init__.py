@@ -4,7 +4,7 @@ This package provides authorization enforcement for Google ADK agents
 using the Denied authorization service.
 
 Example:
-    from denied_sdk.integrations.adk import AuthorizationPlugin
+    from denied_sdk.integrations.google_adk import AuthorizationPlugin
     from google.adk import LlmAgent, Runner
 
     agent = LlmAgent(name="my_agent", tools=[...])

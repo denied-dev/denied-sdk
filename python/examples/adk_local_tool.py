@@ -1,14 +1,16 @@
-"""Scope-based authorization demo for Google ADK integration.
+"""Denied authorization plugin with local Python function tool.
 
-This example demonstrates role and scope-based authorization using
-the Denied authorization service with Google ADK.
+Agent uses a simple read_project() function.
+The Denied plugin checks authorization before calling the tool. Two scenarios
+test the same user reading projects with different resource scopes: user-scoped
+(allowed) vs admin-scoped (denied).
 
 Policy Rule (in Denied):
 - Allow: principal.role='user' AND resource.scope='user' AND action='read'
 
 Setup:
 1. Install dependencies:
-   pip install -e ".[adk,dev]"
+   uv sync --extra adk --extra dev
 
 2. Set environment variables:
    export GEMINI_API_KEY='your-key'
@@ -20,18 +22,13 @@ Setup:
 """
 
 import asyncio
-import logging
 import os
 
 from google.adk import Agent, Runner
 from google.adk.sessions.in_memory_session_service import InMemorySessionService
 from google.genai import types
 
-from integrations.adk import AuthorizationConfig, AuthorizationPlugin
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from denied_sdk.integrations.google_adk import AuthorizationConfig, AuthorizationPlugin
 
 
 # Define tool without scope parameter (scope comes from session state)
@@ -44,7 +41,6 @@ def read_project(project_id: str) -> dict:
     Returns:
         Dictionary with project data.
     """
-    logger.info(f"EXECUTING: read_project({project_id})")
     return {
         "project_id": project_id,
         "data": f"[Mock] Project {project_id} contents",
@@ -151,23 +147,9 @@ if __name__ == "__main__":
     except ImportError:
         pass
 
-    print("\n⚠️  NOTE: This demo requires:")
-    print("  1. Denied API URL set as DENIED_URL environment variable")
-    print("  2. Gemini API key set as GEMINI_API_KEY environment variable")
-    print("  3. Denied API key set as DENIED_API_KEY environment variable")
-    print("\nPolicy needed in Denied:")
-    print(
-        "  - Allow: principal.role='user' AND resource.scope='user' AND action='read'"
-    )
-    print()
-
     # Check for API keys
-    if not os.getenv("GEMINI_API_KEY") and not os.getenv("GOOGLE_GENAI_API_KEY"):
-        print(
-            "❌ Error: GEMINI_API_KEY or GOOGLE_GENAI_API_KEY environment variable not set"
-        )
-        print("\nSet your API key:")
-        print("  export GEMINI_API_KEY='your-api-key-here'")
+    if not os.getenv("GEMINI_API_KEY"):
+        print("❌ Error: GEMINI_API_KEY environment variable not set")
         exit(1)
 
     try:

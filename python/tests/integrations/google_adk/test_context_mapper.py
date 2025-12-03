@@ -4,8 +4,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from integrations.adk.config import AuthorizationConfig
-from integrations.adk.context_mapper import ContextMapper
+from denied_sdk.integrations.google_adk.config import AuthorizationConfig
+from denied_sdk.integrations.google_adk.context_mapper import ContextMapper
 
 
 @pytest.fixture
@@ -28,7 +28,10 @@ def mock_tool_context():
     context.agent_name = "file_agent"
     context.session.id = "session-123"
     context.invocation_id = "invocation-456"
-    context.state = {"role": "admin", "department": "engineering"}
+    context.state = Mock()
+    context.state.to_dict = Mock(
+        return_value={"role": "admin", "department": "engineering"}
+    )
     return context
 
 
@@ -62,7 +65,8 @@ def test_extract_principal_no_role(mapper):
     context.agent_name = "api_agent"
     context.session.id = "session-789"
     context.invocation_id = "invocation-012"
-    context.state = {}  # No role or department
+    context.state = Mock()
+    context.state.to_dict = Mock(return_value={})  # No role or department
 
     principal = mapper.extract_principal(context)
 
@@ -71,11 +75,11 @@ def test_extract_principal_no_role(mapper):
     assert "department" not in principal.attributes
 
 
-def test_extract_resource(mapper, mock_tool):
+def test_extract_resource(mapper, mock_tool, mock_tool_context):
     """Test extracting resource from tool."""
     tool_args = {"file_path": "/etc/passwd", "content": "secret"}
 
-    resource = mapper.extract_resource(mock_tool, tool_args)
+    resource = mapper.extract_resource(mock_tool, tool_args, mock_tool_context)
 
     assert resource.uri == "tool:write_file"
     assert resource.attributes["tool_name"] == "write_file"
@@ -84,21 +88,21 @@ def test_extract_resource(mapper, mock_tool):
     # content should not be extracted (not in resource_arg_names)
 
 
-def test_extract_resource_with_metadata(mapper):
+def test_extract_resource_with_metadata(mapper, mock_tool_context):
     """Test extracting resource with custom metadata."""
     tool = Mock()
     tool.name = "api_call"
     tool.description = "Call external API"
     tool.custom_metadata = {"api_version": "v2", "auth_required": True}
 
-    resource = mapper.extract_resource(tool, {})
+    resource = mapper.extract_resource(tool, {}, mock_tool_context)
 
     assert resource.uri == "tool:api_call"
     assert resource.attributes["api_version"] == "v2"
     assert resource.attributes["auth_required"] is True
 
 
-def test_extract_resource_various_args(mapper, mock_tool):
+def test_extract_resource_various_args(mapper, mock_tool, mock_tool_context):
     """Test extracting different resource argument names."""
     tool_args = {
         "resource_id": "res-123",
@@ -107,7 +111,7 @@ def test_extract_resource_various_args(mapper, mock_tool):
         "other_arg": "not-extracted",
     }
 
-    resource = mapper.extract_resource(mock_tool, tool_args)
+    resource = mapper.extract_resource(mock_tool, tool_args, mock_tool_context)
 
     assert resource.attributes["resource_id"] == "res-123"
     assert resource.attributes["document_id"] == "doc-456"
@@ -137,13 +141,13 @@ def test_extract_action_write_pattern(mapper):
     tool = Mock()
 
     tool.name = "write_file"
-    assert mapper.extract_action(tool) == "write"
+    assert mapper.extract_action(tool) == "create"
 
     tool.name = "create_user"
-    assert mapper.extract_action(tool) == "write"
+    assert mapper.extract_action(tool) == "create"
 
     tool.name = "add_item"
-    assert mapper.extract_action(tool) == "write"
+    assert mapper.extract_action(tool) == "create"
 
 
 def test_extract_action_update_pattern(mapper):
@@ -208,7 +212,7 @@ def test_create_check_request(mapper, mock_tool, mock_tool_context):
     assert request.resource.attributes["file_path"] == "/home/user/data.txt"
 
     # Check action
-    assert request.action == "write"
+    assert request.action == "create"
 
 
 def test_config_disable_extractions():
@@ -226,7 +230,8 @@ def test_config_disable_extractions():
     context.agent_name = "agent"
     context.session.id = "session-123"
     context.invocation_id = "inv-456"
-    context.state = {}
+    context.state = Mock()
+    context.state.to_dict = Mock(return_value={})
 
     principal = mapper.extract_principal(context)
 
@@ -242,5 +247,5 @@ def test_config_disable_extractions():
     tool.description = "Test"
     tool.custom_metadata = None
 
-    resource = mapper.extract_resource(tool, {"file_path": "/test"})
+    resource = mapper.extract_resource(tool, {"file_path": "/test"}, context)
     assert "file_path" not in resource.attributes

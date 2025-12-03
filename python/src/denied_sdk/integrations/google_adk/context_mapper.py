@@ -1,3 +1,4 @@
+import inspect
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -33,14 +34,41 @@ class ContextMapper:
         """
         self.config = config
 
-        # Action verb mapping for common tool name patterns
-        # TODO basic mapper for now...
+        # TODO this could be based on openapi/swagger specs uploaded by user which we can use generate rules
+        # Action verb mapping for tool name patterns
+        # Based on analysis of 277 real MCP tools from various services (GitHub, Jira, Slack, Notion, Confluence, Dropbox, etc.)
         self._action_patterns = [
-            (re.compile(r"^(read|get|fetch|load|list|search|query)_"), "read"),
-            (re.compile(r"^(write|create|add|insert|post|save)_"), "write"),
-            (re.compile(r"^(update|modify|edit|change|set)_"), "update"),
-            (re.compile(r"^(delete|remove|drop)_"), "delete"),
-            (re.compile(r"^(execute|run|call|invoke)_"), "execute"),
+            # Read operations - match at start or after underscore/service prefix
+            (
+                re.compile(r"(^|_)(read|get|fetch|load|list|search|query|retrieve)_"),
+                "read",
+            ),
+            # Create/Write operations
+            (
+                re.compile(r"(^|_)(write|create|add|insert|post|save|send|upload)_"),
+                "create",
+            ),
+            # Update operations
+            (
+                re.compile(r"(^|_)(update|modify|edit|change|set|patch|rename|mark)_"),
+                "update",
+            ),
+            # Delete operations
+            (re.compile(r"(^|_)(delete|remove|drop|unshare)_"), "delete"),
+            # Special operations - map to most appropriate action
+            (
+                re.compile(r"(^|_)(share|add_.*_member)_"),
+                "update",
+            ),
+            # Sharing/permissions
+            (
+                re.compile(r"(^|_)(merge|fork|copy|move)_"),
+                "update",
+            ),
+            # Resource manipulation
+            (re.compile(r"(^|_)(lock|unlock|restore)_"), "update"),  # State changes
+            # Execute operations (fallback for actions)
+            (re.compile(r"(^|_)(execute|run|call|invoke|batch)_"), "execute"),
         ]
 
     def extract_principal(self, tool_context: "ToolContext") -> PrincipalCheck:
@@ -102,6 +130,51 @@ class ContextMapper:
         if hasattr(tool, "description") and tool.description:
             attributes["tool_description"] = tool.description
 
+        # Add tool input schema if available
+        input_schema = None
+
+        # Try to get schema from MCP tool first
+        if hasattr(tool, "raw_mcp_tool") and tool.raw_mcp_tool:
+            try:
+                mcp_tool = tool.raw_mcp_tool
+                if hasattr(mcp_tool, "inputSchema") and mcp_tool.inputSchema:
+                    # MCP tools use JSON Schema format
+                    input_schema = mcp_tool.inputSchema
+            except (ValueError, TypeError, AttributeError):
+                pass
+
+        # Fall back to extracting from function signature for FunctionTool
+        if input_schema is None and hasattr(tool, "func") and callable(tool.func):
+            try:
+                sig = inspect.signature(tool.func)
+                extracted_schema = {}
+                for param_name, param in sig.parameters.items():
+                    # Skip if annotation is empty (Mock signature)
+                    if param.annotation == inspect.Parameter.empty:
+                        continue
+                    param_info = {
+                        "type": (
+                            param.annotation.__name__
+                            if hasattr(param.annotation, "__name__")
+                            else str(param.annotation)
+                        ),
+                        "required": param.default == inspect.Parameter.empty,
+                    }
+                    # Only include default value for simple types
+                    if param.default != inspect.Parameter.empty and isinstance(
+                        param.default, str | int | float | bool | type(None)
+                    ):
+                        param_info["default"] = param.default
+                    extracted_schema[param_name] = param_info
+
+                if extracted_schema:
+                    input_schema = extracted_schema
+            except (ValueError, TypeError):
+                pass
+
+        if input_schema:
+            attributes["tool_input_schema"] = input_schema
+
         # Add tool metadata if available
         if hasattr(tool, "custom_metadata") and tool.custom_metadata:
             attributes.update(tool.custom_metadata)
@@ -155,7 +228,7 @@ class ContextMapper:
 
         # Try to match action patterns
         for pattern, action in self._action_patterns:
-            if pattern.match(tool_name_lower):
+            if pattern.search(tool_name_lower):
                 return action
 
         # Default action
