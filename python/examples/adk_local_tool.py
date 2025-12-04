@@ -9,8 +9,7 @@ Policy Rule (in Denied):
 - Allow: principal.role='user' AND resource.scope='user' AND action='read'
 
 Setup:
-1. Install dependencies:
-   uv sync --extra adk --extra dev
+1. Install: pip install denied-sdk[adk] (or: uv add denied-sdk[adk])
 
 2. Set environment variables:
    export GEMINI_API_KEY='your-key'
