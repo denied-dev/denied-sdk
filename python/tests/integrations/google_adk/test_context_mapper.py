@@ -85,9 +85,11 @@ def test_extract_resource(mapper, mock_tool, mock_tool_context):
     assert resource.uri == "tool:write_file"
     assert resource.attributes["tool_name"] == "write_file"
     assert resource.attributes["tool_description"] == "Write content to a file"
-    assert resource.attributes["file_path"] == "/etc/passwd"
     assert resource.attributes["scope"] == "user"  # Extracted from session state
-    # content should not be extracted (not in resource_arg_names)
+    # All tool args should be in tool_input.values
+    assert "tool_input" in resource.attributes
+    assert resource.attributes["tool_input"]["values"]["file_path"] == "/etc/passwd"
+    assert resource.attributes["tool_input"]["values"]["content"] == "secret"
 
 
 def test_extract_resource_with_metadata(mapper, mock_tool_context):
@@ -104,21 +106,78 @@ def test_extract_resource_with_metadata(mapper, mock_tool_context):
     assert resource.attributes["auth_required"] is True
 
 
-def test_extract_resource_various_args(mapper, mock_tool, mock_tool_context):
-    """Test extracting different resource argument names."""
+def test_extract_resource_all_args_captured(mapper, mock_tool, mock_tool_context):
+    """Test that all tool arguments are captured in tool_input.values."""
     tool_args = {
         "resource_id": "res-123",
         "document_id": "doc-456",
         "path": "/var/log/app.log",
-        "other_arg": "not-extracted",
+        "custom_arg": "also-captured",
     }
 
     resource = mapper.extract_resource(mock_tool, tool_args, mock_tool_context)
 
-    assert resource.attributes["resource_id"] == "res-123"
-    assert resource.attributes["document_id"] == "doc-456"
-    assert resource.attributes["path"] == "/var/log/app.log"
-    assert "other_arg" not in resource.attributes
+    # All args should be in tool_input.values
+    values = resource.attributes["tool_input"]["values"]
+    assert values["resource_id"] == "res-123"
+    assert values["document_id"] == "doc-456"
+    assert values["path"] == "/var/log/app.log"
+    assert values["custom_arg"] == "also-captured"
+
+
+def test_extract_resource_with_mcp_schema(mapper, mock_tool_context):
+    """Test extracting resource with MCP tool schema."""
+    tool = Mock()
+    tool.name = "mcp_tool"
+    tool.description = "MCP tool"
+    tool.custom_metadata = None
+    tool.raw_mcp_tool = Mock()
+    tool.raw_mcp_tool.inputSchema = {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+    }
+
+    tool_args = {"query": "test search"}
+    resource = mapper.extract_resource(tool, tool_args, mock_tool_context)
+
+    # Should have both schema and values in tool_input
+    assert "tool_input" in resource.attributes
+    assert resource.attributes["tool_input"]["schema"] == {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+    }
+    assert resource.attributes["tool_input"]["values"] == {"query": "test search"}
+
+
+def test_extract_resource_with_function_schema(mapper, mock_tool_context):
+    """Test extracting resource with function tool schema."""
+
+    def sample_func(name: str, count: int = 10) -> str:
+        return f"{name}: {count}"
+
+    tool = Mock()
+    tool.name = "function_tool"
+    tool.description = "Function tool"
+    tool.custom_metadata = None
+    tool.func = sample_func
+    # Ensure raw_mcp_tool is not present
+    del tool.raw_mcp_tool
+
+    tool_args = {"name": "test", "count": 5}
+    resource = mapper.extract_resource(tool, tool_args, mock_tool_context)
+
+    # Should have schema extracted from function signature
+    assert "tool_input" in resource.attributes
+    schema = resource.attributes["tool_input"]["schema"]
+    assert "name" in schema
+    assert schema["name"]["type"] == "str"
+    assert schema["name"]["required"] is True
+    assert "count" in schema
+    assert schema["count"]["type"] == "int"
+    assert schema["count"]["required"] is False
+    assert schema["count"]["default"] == 10
+    # Values should be captured
+    assert resource.attributes["tool_input"]["values"] == {"name": "test", "count": 5}
 
 
 def test_extract_action_read_pattern(mapper):
@@ -211,7 +270,10 @@ def test_create_check_request(mapper, mock_tool, mock_tool_context):
 
     # Check resource
     assert request.resource.uri == "tool:write_file"
-    assert request.resource.attributes["file_path"] == "/home/user/data.txt"
+    assert (
+        request.resource.attributes["tool_input"]["values"]["file_path"]
+        == "/home/user/data.txt"
+    )
     assert request.resource.attributes["scope"] == "user"
 
     # Check action
@@ -244,11 +306,11 @@ def test_config_disable_extractions():
     assert "session_id" not in principal.attributes
     assert "invocation_id" in principal.attributes  # Always included
 
-    # Test tool args not extracted
+    # Test tool_input not included when extract_tool_args is False
     tool = Mock()
     tool.name = "test_tool"
     tool.description = "Test"
     tool.custom_metadata = None
 
     resource = mapper.extract_resource(tool, {"file_path": "/test"}, context)
-    assert "file_path" not in resource.attributes
+    assert "tool_input" not in resource.attributes

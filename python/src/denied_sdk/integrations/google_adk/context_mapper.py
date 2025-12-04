@@ -110,49 +110,35 @@ class ContextMapper:
             attributes=attributes,
         )
 
-    def extract_resource(
-        self, tool: "BaseTool", tool_args: dict[str, Any], tool_context: "ToolContext"
-    ) -> ResourceCheck:
-        """Extract resource information from tool and arguments.
+    def _extract_input_schema(self, tool: "BaseTool") -> dict[str, Any] | None:
+        """Extract tool input schema from MCP tool or function signature.
 
         Args:
-            tool: The tool being invoked.
-            tool_args: Arguments passed to the tool.
+            tool: The tool to extract schema from.
 
         Returns:
-            ResourceCheck with URI and attributes for the resource.
+            Input schema dict or None if unavailable.
         """
-        attributes: dict[str, Any] = {
-            "tool_name": tool.name,
-        }
-
-        # Add tool description if available
-        if hasattr(tool, "description") and tool.description:
-            attributes["tool_description"] = tool.description
-
-        # Add tool input schema if available
-        input_schema = None
-
         # Try to get schema from MCP tool first
         if hasattr(tool, "raw_mcp_tool") and tool.raw_mcp_tool:
             try:
                 mcp_tool = tool.raw_mcp_tool
                 if hasattr(mcp_tool, "inputSchema") and mcp_tool.inputSchema:
                     # MCP tools use JSON Schema format
-                    input_schema = mcp_tool.inputSchema
+                    return mcp_tool.inputSchema
             except (ValueError, TypeError, AttributeError):
                 pass
 
         # Fall back to extracting from function signature for FunctionTool
-        if input_schema is None and hasattr(tool, "func") and callable(tool.func):
+        if hasattr(tool, "func") and callable(tool.func):
             try:
                 sig = inspect.signature(tool.func)
-                extracted_schema = {}
+                extracted_schema: dict[str, Any] = {}
                 for param_name, param in sig.parameters.items():
                     # Skip if annotation is empty (Mock signature)
                     if param.annotation == inspect.Parameter.empty:
                         continue
-                    param_info = {
+                    param_info: dict[str, Any] = {
                         "type": (
                             param.annotation.__name__
                             if hasattr(param.annotation, "__name__")
@@ -168,34 +154,50 @@ class ContextMapper:
                     extracted_schema[param_name] = param_info
 
                 if extracted_schema:
-                    input_schema = extracted_schema
+                    return extracted_schema
             except (ValueError, TypeError):
                 pass
 
-        if input_schema:
-            attributes["tool_input_schema"] = input_schema
+        return None
+
+    def extract_resource(
+        self, tool: "BaseTool", tool_args: dict[str, Any], tool_context: "ToolContext"
+    ) -> ResourceCheck:
+        """Extract resource information from tool and arguments.
+
+        Args:
+            tool: The tool being invoked.
+            tool_args: Arguments passed to the tool.
+            tool_context: The ADK tool execution context.
+
+        Returns:
+            ResourceCheck with URI and attributes for the resource.
+        """
+        attributes: dict[str, Any] = {
+            "tool_name": tool.name,
+        }
+
+        # Add tool description if available
+        if hasattr(tool, "description") and tool.description:
+            attributes["tool_description"] = tool.description
+
+        # Add tool input (schema and values) if configured
+        if self.config.extract_tool_args:
+            tool_input: dict[str, Any] = {}
+
+            schema = self._extract_input_schema(tool)
+            if schema:
+                tool_input["schema"] = schema
+
+            if tool_args:
+                tool_input["values"] = tool_args
+
+            if tool_input:
+                attributes["tool_input"] = tool_input
 
         # Add tool metadata if available
         if hasattr(tool, "custom_metadata") and tool.custom_metadata:
             attributes.update(tool.custom_metadata)
-
-        # Extract tool arguments if configured
-        if self.config.extract_tool_args:
-            # Common argument names that represent resources
-            resource_arg_names = [
-                "file_path",
-                "path",
-                "filename",
-                "resource_id",
-                "document_id",
-                "object_id",
-                "key",
-                "name",
-            ]
-
-            for arg_name in resource_arg_names:
-                if arg_name in tool_args:
-                    attributes[arg_name] = tool_args[arg_name]
 
         # Extract configured state keys into resource attributes
         if self.config.resource_state_keys:
