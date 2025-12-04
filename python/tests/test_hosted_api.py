@@ -32,18 +32,18 @@ import pytest
 
 from denied_sdk import DeniedClient
 
-# Load .env file
-try:
-    from dotenv import load_dotenv
-
-    load_dotenv()
-except ImportError:
-    pass
-
 
 @pytest.fixture
 def client():
     """Create a DeniedClient with real endpoint from env vars."""
+    # Load .env file inside fixture to avoid polluting other tests during collection
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except ImportError:
+        pass
+
     url = os.getenv("DENIED_URL")
     api_key = os.getenv("DENIED_API_KEY")
 

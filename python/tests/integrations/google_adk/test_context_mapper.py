@@ -10,8 +10,11 @@ from denied_sdk.integrations.google_adk.context_mapper import ContextMapper
 
 @pytest.fixture
 def config():
-    """Create a default config."""
-    return AuthorizationConfig()
+    """Create a config with state key extraction."""
+    return AuthorizationConfig(
+        principal_state_keys=["role"],
+        resource_state_keys=["scope"],
+    )
 
 
 @pytest.fixture
@@ -29,9 +32,7 @@ def mock_tool_context():
     context.session.id = "session-123"
     context.invocation_id = "invocation-456"
     context.state = Mock()
-    context.state.to_dict = Mock(
-        return_value={"role": "admin", "department": "engineering"}
-    )
+    context.state.to_dict = Mock(return_value={"role": "user", "scope": "user"})
     return context
 
 
@@ -54,25 +55,25 @@ def test_extract_principal(mapper, mock_tool_context):
     assert principal.attributes["agent_name"] == "file_agent"
     assert principal.attributes["session_id"] == "session-123"
     assert principal.attributes["invocation_id"] == "invocation-456"
-    assert principal.attributes["role"] == "admin"
-    assert principal.attributes["department"] == "engineering"
+    assert principal.attributes["role"] == "user"
+    # scope is a resource attribute, not principal
+    assert "scope" not in principal.attributes
 
 
-def test_extract_principal_no_role(mapper):
-    """Test extracting principal without role in state."""
+def test_extract_principal_no_state_keys(mapper):
+    """Test extracting principal without configured state keys present."""
     context = Mock()
     context.user_id = "bob"
     context.agent_name = "api_agent"
     context.session.id = "session-789"
     context.invocation_id = "invocation-012"
     context.state = Mock()
-    context.state.to_dict = Mock(return_value={})  # No role or department
+    context.state.to_dict = Mock(return_value={})  # No role in state
 
     principal = mapper.extract_principal(context)
 
     assert principal.uri == "user:bob"
     assert "role" not in principal.attributes
-    assert "department" not in principal.attributes
 
 
 def test_extract_resource(mapper, mock_tool, mock_tool_context):
@@ -85,6 +86,7 @@ def test_extract_resource(mapper, mock_tool, mock_tool_context):
     assert resource.attributes["tool_name"] == "write_file"
     assert resource.attributes["tool_description"] == "Write content to a file"
     assert resource.attributes["file_path"] == "/etc/passwd"
+    assert resource.attributes["scope"] == "user"  # Extracted from session state
     # content should not be extracted (not in resource_arg_names)
 
 
@@ -205,11 +207,12 @@ def test_create_check_request(mapper, mock_tool, mock_tool_context):
 
     # Check principal
     assert request.principal.uri == "user:alice"
-    assert request.principal.attributes["role"] == "admin"
+    assert request.principal.attributes["role"] == "user"
 
     # Check resource
     assert request.resource.uri == "tool:write_file"
     assert request.resource.attributes["file_path"] == "/home/user/data.txt"
+    assert request.resource.attributes["scope"] == "user"
 
     # Check action
     assert request.action == "create"

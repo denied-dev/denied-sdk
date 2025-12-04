@@ -62,6 +62,10 @@ async def main():
         denied_url=os.getenv("DENIED_URL"),
         denied_api_key=os.getenv("DENIED_API_KEY"),
         fail_mode="closed",
+        # Extract role from session state into principal attributes
+        principal_state_keys=["role"],
+        # Extract scope from session state into resource attributes
+        resource_state_keys=["scope"],
     )
 
     # Create runner with authorization plugin
@@ -101,13 +105,13 @@ async def main():
         print(f"Request: {scenario['message']}")
         print(f"{'-' * 60}")
 
-        # Create session with role and resource_scope in state
+        # Create session with role and scope in state
         session = await session_service.create_session(
             app_name="scope_demo",
             user_id=scenario["user_id"],
             state={
                 "role": scenario["role"],
-                "resource_scope": scenario["scope"],
+                "scope": scenario["scope"],
             },
         )
 

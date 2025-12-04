@@ -65,6 +65,14 @@ class AuthorizationConfig(BaseModel):
         default=True,
         description="Whether to extract tool arguments into resource attributes",
     )
+    principal_state_keys: list[str] = Field(
+        default_factory=list,
+        description="Session state keys to extract into principal attributes",
+    )
+    resource_state_keys: list[str] = Field(
+        default_factory=list,
+        description="Session state keys to extract into resource attributes",
+    )
 
     @model_validator(mode="before")
     @classmethod

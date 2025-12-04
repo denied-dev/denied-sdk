@@ -94,12 +94,12 @@ class ContextMapper:
         # Add invocation ID for tracking
         attributes["invocation_id"] = tool_context.invocation_id
 
-        # Extract role and other attributes from session state
-        state = tool_context.state.to_dict()
-        if "role" in state:
-            attributes["role"] = state["role"]
-        if "department" in state:
-            attributes["department"] = state["department"]
+        # Extract configured state keys into principal attributes
+        if self.config.principal_state_keys:
+            state = tool_context.state.to_dict()
+            for key in self.config.principal_state_keys:
+                if key in state:
+                    attributes[key] = state[key]
 
         # Build principal URI
         principal_uri = f"user:{tool_context.user_id}"
@@ -197,10 +197,12 @@ class ContextMapper:
                 if arg_name in tool_args:
                     attributes[arg_name] = tool_args[arg_name]
 
-        # Extract scope from session state if available
-        state = tool_context.state.to_dict()
-        if "resource_scope" in state:
-            attributes["scope"] = state["resource_scope"]
+        # Extract configured state keys into resource attributes
+        if self.config.resource_state_keys:
+            state = tool_context.state.to_dict()
+            for key in self.config.resource_state_keys:
+                if key in state:
+                    attributes[key] = state[key]
 
         # Build resource URI
         resource_uri = f"tool:{tool.name}"

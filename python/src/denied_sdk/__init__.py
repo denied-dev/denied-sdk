@@ -13,7 +13,6 @@ from .schemas import (
 __all__ = [
     "DeniedClient",
     "AsyncDeniedClient",
-    "BaseDeniedClient",
     "EntityType",
     "CheckRequest",
     "CheckResponse",
