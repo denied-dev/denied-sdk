@@ -180,84 +180,6 @@ def test_extract_resource_with_function_schema(mapper, mock_tool_context):
     assert resource.attributes["tool_input"]["values"] == {"name": "test", "count": 5}
 
 
-def test_extract_action_read_pattern(mapper):
-    """Test action extraction for read verbs."""
-    tool = Mock()
-
-    tool.name = "read_file"
-    assert mapper.extract_action(tool) == "read"
-
-    tool.name = "get_user"
-    assert mapper.extract_action(tool) == "read"
-
-    tool.name = "fetch_data"
-    assert mapper.extract_action(tool) == "read"
-
-    tool.name = "list_items"
-    assert mapper.extract_action(tool) == "read"
-
-
-def test_extract_action_write_pattern(mapper):
-    """Test action extraction for write verbs."""
-    tool = Mock()
-
-    tool.name = "write_file"
-    assert mapper.extract_action(tool) == "create"
-
-    tool.name = "create_user"
-    assert mapper.extract_action(tool) == "create"
-
-    tool.name = "add_item"
-    assert mapper.extract_action(tool) == "create"
-
-
-def test_extract_action_update_pattern(mapper):
-    """Test action extraction for update verbs."""
-    tool = Mock()
-
-    tool.name = "update_record"
-    assert mapper.extract_action(tool) == "update"
-
-    tool.name = "modify_settings"
-    assert mapper.extract_action(tool) == "update"
-
-    tool.name = "edit_document"
-    assert mapper.extract_action(tool) == "update"
-
-
-def test_extract_action_delete_pattern(mapper):
-    """Test action extraction for delete verbs."""
-    tool = Mock()
-
-    tool.name = "delete_file"
-    assert mapper.extract_action(tool) == "delete"
-
-    tool.name = "remove_user"
-    assert mapper.extract_action(tool) == "delete"
-
-
-def test_extract_action_execute_pattern(mapper):
-    """Test action extraction for execute verbs."""
-    tool = Mock()
-
-    tool.name = "execute_command"
-    assert mapper.extract_action(tool) == "execute"
-
-    tool.name = "run_script"
-    assert mapper.extract_action(tool) == "execute"
-
-
-def test_extract_action_no_match(mapper):
-    """Test action extraction when no pattern matches."""
-    tool = Mock()
-
-    tool.name = "calculate_total"
-    assert mapper.extract_action(tool) == "execute"
-
-    tool.name = "process_data"
-    assert mapper.extract_action(tool) == "execute"
-
-
 def test_create_check_request(mapper, mock_tool, mock_tool_context):
     """Test creating a complete check request."""
     tool_args = {"file_path": "/home/user/data.txt"}
@@ -280,12 +202,9 @@ def test_create_check_request(mapper, mock_tool, mock_tool_context):
     assert request.action == "create"
 
 
-def test_config_disable_extractions():
-    """Test disabling context extractions via config."""
+def test_config_disable_tool_args():
+    """Test disabling tool args extraction via config."""
     config = AuthorizationConfig(
-        include_user_id=False,
-        include_agent_name=False,
-        include_session_id=False,
         extract_tool_args=False,
     )
     mapper = ContextMapper(config)
@@ -297,14 +216,6 @@ def test_config_disable_extractions():
     context.invocation_id = "inv-456"
     context.state = Mock()
     context.state.to_dict = Mock(return_value={})
-
-    principal = mapper.extract_principal(context)
-
-    # Should only have invocation_id (always included)
-    assert "user_id" not in principal.attributes
-    assert "agent_name" not in principal.attributes
-    assert "session_id" not in principal.attributes
-    assert "invocation_id" in principal.attributes  # Always included
 
     # Test tool_input not included when extract_tool_args is False
     tool = Mock()

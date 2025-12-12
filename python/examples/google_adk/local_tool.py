@@ -14,7 +14,7 @@ Setup:
 2. Set environment variables:
    export GEMINI_API_KEY='your-key'
    export DENIED_API_KEY='your-key'
-   export DENIED_URL='your-pdp-url'
+   export DENIED_URL='https://app.denied.dev/pdp/123'
 
 3. Run the example:
    python examples/adk_scope_example.py

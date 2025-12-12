@@ -278,6 +278,23 @@ wheels = [
 ]
 
 [[package]]
+name = "claude-agent-sdk"
+version = "0.1.15"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "mcp" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2e/a0/95653904b2f3d879e7292eb68de42dfe710edd840b946bb45917ab0f299c/claude_agent_sdk-0.1.15.tar.gz", hash = "sha256:9f9445e7c58292e910f0b68d083112046932db32d4536f88d4a31ed9fc696922", size = 55976, upload-time = "2025-12-11T16:44:03.264Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c8/66/d9dee0551c578835e32289d52cd8365823060df197ec51d2f1e8084df1ff/claude_agent_sdk-0.1.15-py3-none-macosx_11_0_arm64.whl", hash = "sha256:c93b75cedb6c9cd5164e139a8255232797458007d3b80f8cd039bf14222325a6", size = 49817631, upload-time = "2025-12-11T16:43:50.73Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/c2/3754c6f579a50a9dddd638dd899926901dd3824678bc4da71e3c72f93db0/claude_agent_sdk-0.1.15-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:87f974a5260e4a8804f35d86f3637330da0dd5f2657fd484f39c6f93e1a16dff", size = 64075568, upload-time = "2025-12-11T16:43:53.882Z" },
+    { url = "https://files.pythonhosted.org/packages/07/f1/7145365cadccad37ed92f514debc5bda030c2af9de4faa56d7ecfdd928df/claude_agent_sdk-0.1.15-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:9b2c2b64d1acac743dc2f984fc128eb27a18c34f0182ec2b773fc9d279dbf14a", size = 65667068, upload-time = "2025-12-11T16:43:57.203Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/6c/d8056a709ed86d0ab9b0d130c827553cff59ebea86b974cca9671e6594fc/claude_agent_sdk-0.1.15-py3-none-win_amd64.whl", hash = "sha256:796fc8a29252b25b18a4c7d7740a503149484831e8366a3070722b80a4aa6a91", size = 67955543, upload-time = "2025-12-11T16:44:00.98Z" },
+]
+
+[[package]]
 name = "click"
 version = "8.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -385,6 +402,9 @@ dependencies = [
 adk = [
     { name = "google-adk" },
 ]
+claude-sdk = [
+    { name = "claude-agent-sdk" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -397,11 +417,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "claude-agent-sdk", marker = "extra == 'claude-sdk'", specifier = ">=0.1.0" },
     { name = "google-adk", marker = "extra == 'adk'", specifier = ">=0.1.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pydantic", specifier = ">=2.10.6" },
 ]
-provides-extras = ["adk"]
+provides-extras = ["adk", "claude-sdk"]
 
 [package.metadata.requires-dev]
 dev = [

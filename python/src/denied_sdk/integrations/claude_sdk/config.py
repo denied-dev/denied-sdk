@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class AuthorizationConfig(BaseModel):
-    """Configuration for the Denied authorization plugin.
+    """Configuration for the Denied authorization callback with Claude Agent SDK.
 
     Attributes:
         denied_url: URL of the Denied authorization service.
@@ -18,6 +18,15 @@ class AuthorizationConfig(BaseModel):
         retry_attempts: Number of retry attempts for failed authorization checks.
         timeout_seconds: Timeout for authorization service requests in seconds.
         extract_tool_args: Whether to extract tool arguments into resource attributes.
+        user_id: User ID to use for principal. Can be provided at callback creation.
+        session_id: Session ID to include in principal attributes.
+
+    Example:
+        config = AuthorizationConfig(
+            denied_url="https://auth.company.com",
+            fail_mode="closed",
+            user_id="user-123",
+        )
     """
 
     denied_url: str | None = Field(
@@ -50,13 +59,15 @@ class AuthorizationConfig(BaseModel):
         default=True,
         description="Whether to extract tool arguments into resource attributes",
     )
-    principal_state_keys: list[str] = Field(
-        default_factory=list,
-        description="Session state keys to extract into principal attributes",
+
+    # Principal context (captured at callback creation)
+    user_id: str | None = Field(
+        default=None,
+        description="User ID to use for principal identification",
     )
-    resource_state_keys: list[str] = Field(
-        default_factory=list,
-        description="Session state keys to extract into resource attributes",
+    session_id: str | None = Field(
+        default=None,
+        description="Session ID to include in principal attributes",
     )
 
     @model_validator(mode="before")

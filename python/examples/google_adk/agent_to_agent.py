@@ -33,7 +33,7 @@ Setup:
 2. Set env vars:
    export GEMINI_API_KEY='your-key'
    export DENIED_API_KEY='your-key'
-   export DENIED_URL='your-pdp-url'
+   export DENIED_URL='https://app.denied.dev/pdp/123'
 3. Run: python examples/adk_agent_to_agent.py
 """
 
