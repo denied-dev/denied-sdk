@@ -42,7 +42,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: ./python
-        run: uv sync --extra adk
+        run: uv sync --extra adk --extra claude-sdk
 
       - name: Run tests
         working-directory: ./python
