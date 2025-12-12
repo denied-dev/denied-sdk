@@ -86,10 +86,17 @@ export class DeniedClient {
     try {
       const response = await this.client.post<CheckResponse>("/check", request);
       return this.handleResponse(response);
-    } catch (error: any) {
-      if (error.response && error.response.status) {
-        const data = error.response.data ? JSON.stringify(error.response.data) : "";
-        throw new Error(`HTTP ${error.response.status}${data ? ": " + data : ""}`);
+    } catch (error: unknown) {
+      if (typeof error === "object" && error !== null && "response" in error) {
+        const axiosError = error as { response?: { status: number; data?: unknown } };
+        if (axiosError.response && axiosError.response.status) {
+          const data = axiosError.response.data
+            ? JSON.stringify(axiosError.response.data)
+            : "";
+          throw new Error(
+            `HTTP ${axiosError.response.status}${data ? ": " + data : ""}`,
+          );
+        }
       }
       throw error;
     }
@@ -108,10 +115,17 @@ export class DeniedClient {
         checkRequests,
       );
       return this.handleResponse(response);
-    } catch (error: any) {
-      if (error.response && error.response.status) {
-        const data = error.response.data ? JSON.stringify(error.response.data) : "";
-        throw new Error(`HTTP ${error.response.status}${data ? ": " + data : ""}`);
+    } catch (error: unknown) {
+      if (typeof error === "object" && error !== null && "response" in error) {
+        const axiosError = error as { response?: { status: number; data?: unknown } };
+        if (axiosError.response && axiosError.response.status) {
+          const data = axiosError.response.data
+            ? JSON.stringify(axiosError.response.data)
+            : "";
+          throw new Error(
+            `HTTP ${axiosError.response.status}${data ? ": " + data : ""}`,
+          );
+        }
       }
       throw error;
     }
