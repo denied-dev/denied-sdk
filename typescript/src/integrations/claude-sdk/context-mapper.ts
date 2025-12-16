@@ -110,7 +110,8 @@ export class ContextMapper {
   ): CheckRequest {
     const principal = this.extractPrincipal();
     const resource = this.extractResource(toolName, toolInput);
-    const action = extractAction(toolName);
+    // Pass toolInput for Bash command analysis
+    const action = extractAction(toolName, toolInput);
 
     return {
       principal,

@@ -24,10 +24,67 @@ describe("extractAction", () => {
     });
 
     it("should map Execute tools to 'execute'", () => {
-      expect(extractAction("Bash")).toBe("execute");
       expect(extractAction("Task")).toBe("execute");
       expect(extractAction("TodoWrite")).toBe("execute");
       expect(extractAction("KillShell")).toBe("execute");
+    });
+
+    it("should map Bash without command to 'execute'", () => {
+      expect(extractAction("Bash")).toBe("execute");
+      expect(extractAction("Bash", {})).toBe("execute");
+      expect(extractAction("Bash", { command: "" })).toBe("execute");
+    });
+  });
+
+  describe("Bash command analysis", () => {
+    it("should map Bash read commands to 'read'", () => {
+      expect(extractAction("Bash", { command: "ls -la" })).toBe("read");
+      expect(extractAction("Bash", { command: "cat file.txt" })).toBe("read");
+      expect(extractAction("Bash", { command: "head -n 10 file.txt" })).toBe("read");
+      expect(extractAction("Bash", { command: "tail -f log.txt" })).toBe("read");
+      expect(extractAction("Bash", { command: "grep pattern file.txt" })).toBe("read");
+      expect(extractAction("Bash", { command: "find . -name '*.ts'" })).toBe("read");
+      expect(extractAction("Bash", { command: "pwd" })).toBe("read");
+      expect(extractAction("Bash", { command: "whoami" })).toBe("read");
+      expect(extractAction("Bash", { command: "echo hello" })).toBe("read");
+    });
+
+    it("should map Bash write/create commands to 'create'", () => {
+      expect(extractAction("Bash", { command: "echo hello > file.txt" })).toBe(
+        "create",
+      );
+      expect(extractAction("Bash", { command: "echo hello >> file.txt" })).toBe(
+        "create",
+      );
+      expect(extractAction("Bash", { command: "cat > file.txt" })).toBe("create");
+      expect(extractAction("Bash", { command: "cp src.txt dest.txt" })).toBe("create");
+      expect(extractAction("Bash", { command: "mv old.txt new.txt" })).toBe("create");
+      expect(extractAction("Bash", { command: "mkdir new_dir" })).toBe("create");
+      expect(extractAction("Bash", { command: "touch new_file.txt" })).toBe("create");
+      expect(extractAction("Bash", { command: "tee output.txt" })).toBe("create");
+    });
+
+    it("should map Bash delete commands to 'delete'", () => {
+      expect(extractAction("Bash", { command: "rm file.txt" })).toBe("delete");
+      expect(extractAction("Bash", { command: "rm -rf directory" })).toBe("delete");
+      expect(extractAction("Bash", { command: "rmdir empty_dir" })).toBe("delete");
+      expect(extractAction("Bash", { command: "unlink file.txt" })).toBe("delete");
+    });
+
+    it("should map Bash update commands to 'update'", () => {
+      expect(extractAction("Bash", { command: "sed -i 's/old/new/' file.txt" })).toBe(
+        "update",
+      );
+      expect(extractAction("Bash", { command: "chmod 755 script.sh" })).toBe("update");
+      expect(extractAction("Bash", { command: "chown user:group file.txt" })).toBe(
+        "update",
+      );
+    });
+
+    it("should map unknown Bash commands to 'execute'", () => {
+      expect(extractAction("Bash", { command: "npm install" })).toBe("execute");
+      expect(extractAction("Bash", { command: "node script.js" })).toBe("execute");
+      expect(extractAction("Bash", { command: "python script.py" })).toBe("execute");
     });
   });
 

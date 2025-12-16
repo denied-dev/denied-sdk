@@ -134,3 +134,60 @@ class TestDefaultAction:
         assert extract_action("unknown_tool") == "execute"
         assert extract_action("my_custom_tool") == "execute"
         assert extract_action("analyze") == "execute"
+
+
+class TestBashCommandAnalysis:
+    """Test Bash command content analysis."""
+
+    def test_bash_without_command_returns_execute(self):
+        """Test Bash without command input returns execute."""
+        assert extract_action("Bash") == "execute"
+        assert extract_action("Bash", {}) == "execute"
+        assert extract_action("Bash", {"command": ""}) == "execute"
+
+    def test_bash_read_commands(self):
+        """Test Bash read commands map to read action."""
+        assert extract_action("Bash", {"command": "ls -la"}) == "read"
+        assert extract_action("Bash", {"command": "cat file.txt"}) == "read"
+        assert extract_action("Bash", {"command": "head -n 10 file.txt"}) == "read"
+        assert extract_action("Bash", {"command": "tail -f log.txt"}) == "read"
+        assert extract_action("Bash", {"command": "grep pattern file.txt"}) == "read"
+        assert extract_action("Bash", {"command": "find . -name '*.py'"}) == "read"
+        assert extract_action("Bash", {"command": "pwd"}) == "read"
+        assert extract_action("Bash", {"command": "whoami"}) == "read"
+        assert extract_action("Bash", {"command": "echo hello"}) == "read"
+
+    def test_bash_create_commands(self):
+        """Test Bash write/create commands map to create action."""
+        assert extract_action("Bash", {"command": "echo hello > file.txt"}) == "create"
+        assert extract_action("Bash", {"command": "echo hello >> file.txt"}) == "create"
+        assert extract_action("Bash", {"command": "cat > file.txt"}) == "create"
+        assert extract_action("Bash", {"command": "cp src.txt dest.txt"}) == "create"
+        assert extract_action("Bash", {"command": "mv old.txt new.txt"}) == "create"
+        assert extract_action("Bash", {"command": "mkdir new_dir"}) == "create"
+        assert extract_action("Bash", {"command": "touch new_file.txt"}) == "create"
+        assert extract_action("Bash", {"command": "tee output.txt"}) == "create"
+
+    def test_bash_delete_commands(self):
+        """Test Bash delete commands map to delete action."""
+        assert extract_action("Bash", {"command": "rm file.txt"}) == "delete"
+        assert extract_action("Bash", {"command": "rm -rf directory"}) == "delete"
+        assert extract_action("Bash", {"command": "rmdir empty_dir"}) == "delete"
+        assert extract_action("Bash", {"command": "unlink file.txt"}) == "delete"
+
+    def test_bash_update_commands(self):
+        """Test Bash update commands map to update action."""
+        assert (
+            extract_action("Bash", {"command": "sed -i 's/old/new/' file.txt"})
+            == "update"
+        )
+        assert extract_action("Bash", {"command": "chmod 755 script.sh"}) == "update"
+        assert (
+            extract_action("Bash", {"command": "chown user:group file.txt"}) == "update"
+        )
+
+    def test_bash_unknown_commands(self):
+        """Test unknown Bash commands map to execute action."""
+        assert extract_action("Bash", {"command": "npm install"}) == "execute"
+        assert extract_action("Bash", {"command": "node script.js"}) == "execute"
+        assert extract_action("Bash", {"command": "python script.py"}) == "execute"

@@ -190,7 +190,8 @@ class ContextMapper:
         """
         principal = self.extract_principal(tool_context)
         resource = self.extract_resource(tool, tool_args, tool_context)
-        action = extract_action(tool.name)
+        # Pass tool_args for Bash command analysis
+        action = extract_action(tool.name, tool_args)
 
         return CheckRequest(
             principal=principal,

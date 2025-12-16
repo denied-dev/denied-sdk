@@ -6,5 +6,5 @@
       "denied-sdk": ["../src/index"]
     }
   },
-  "include": ["*.ts"]
+  "include": ["**/*.ts"]
 }
