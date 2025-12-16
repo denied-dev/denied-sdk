@@ -20,12 +20,12 @@ _ACTION_PATTERNS = [
     ),
     # Create/Write operations
     (
-        re.compile(r"^(Write|NotebookEdit)$", re.IGNORECASE),
+        re.compile(r"^Write$", re.IGNORECASE),
         "create",
     ),
     # Update operations
     (
-        re.compile(r"^(Edit|MultiEdit)$", re.IGNORECASE),
+        re.compile(r"^(Edit|MultiEdit|NotebookEdit)$", re.IGNORECASE),
         "update",
     ),
     # Execute operations

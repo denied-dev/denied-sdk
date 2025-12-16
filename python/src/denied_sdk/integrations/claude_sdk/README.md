@@ -114,8 +114,8 @@ Tool names are mapped to actions:
 
 **Claude Code Built-in Tools:**
 - `Read`, `Glob`, `Grep`, `WebFetch`, `WebSearch` -> **read**
-- `Write`, `NotebookEdit` -> **create**
-- `Edit`, `MultiEdit` -> **update**
+- `Write` -> **create**
+- `Edit`, `MultiEdit`, `NotebookEdit` -> **update**
 - `Bash`, `Task`, `TodoWrite`, `KillShell` -> **execute**
 
 **MCP Tool Patterns:**

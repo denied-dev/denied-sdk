@@ -19,12 +19,12 @@ class TestClaudeCodeBuiltInTools:
     def test_create_tools(self):
         """Test action extraction for create/write tools."""
         assert extract_action("Write") == "create"
-        assert extract_action("NotebookEdit") == "create"
 
     def test_update_tools(self):
         """Test action extraction for update tools."""
         assert extract_action("Edit") == "update"
         assert extract_action("MultiEdit") == "update"
+        assert extract_action("NotebookEdit") == "update"
 
     def test_execute_tools(self):
         """Test action extraction for execute tools."""
