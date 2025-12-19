@@ -44,8 +44,8 @@ _ACTION_PATTERNS: list[ActionPattern] = [
         r"^(Read|Glob|Grep|WebFetch|WebSearch|ListMcpResourcesTool|ReadMcpResourceTool)$",
         "read",
     ),
-    _p(r"^(Write|NotebookEdit)$", "create"),
-    _p(r"^(Edit|MultiEdit)$", "update"),
+    _p(r"^(Write)$", "create"),
+    _p(r"^(Edit|MultiEdit|NotebookEdit)$", "update"),
     _p(r"^(Task|TodoWrite|KillShell)$", "execute"),
     # MCP patterns - specific operations first
     _p(r"(^|_)(execute|run|call|invoke|batch)(_|$)", "execute"),
