@@ -1,8 +1,8 @@
 import inspect
-import re
 from typing import TYPE_CHECKING, Any
 
 from denied_sdk.enums.entity import EntityType
+from denied_sdk.integrations.shared import extract_action
 from denied_sdk.schemas.check import CheckRequest, PrincipalCheck, ResourceCheck
 
 from .config import AuthorizationConfig
@@ -34,43 +34,6 @@ class ContextMapper:
         """
         self.config = config
 
-        # TODO this could be based on openapi/swagger specs uploaded by user which we can use generate rules
-        # Action verb mapping for tool name patterns
-        # Based on analysis of 277 real MCP tools from various services (GitHub, Jira, Slack, Notion, Confluence, Dropbox, etc.)
-        self._action_patterns = [
-            # Read operations - match at start or after underscore/service prefix
-            (
-                re.compile(r"(^|_)(read|get|fetch|load|list|search|query|retrieve)_"),
-                "read",
-            ),
-            # Create/Write operations
-            (
-                re.compile(r"(^|_)(write|create|add|insert|post|save|send|upload)_"),
-                "create",
-            ),
-            # Update operations
-            (
-                re.compile(r"(^|_)(update|modify|edit|change|set|patch|rename|mark)_"),
-                "update",
-            ),
-            # Delete operations
-            (re.compile(r"(^|_)(delete|remove|drop|unshare)_"), "delete"),
-            # Special operations - map to most appropriate action
-            (
-                re.compile(r"(^|_)(share|add_.*_member)_"),
-                "update",
-            ),
-            # Sharing/permissions
-            (
-                re.compile(r"(^|_)(merge|fork|copy|move)_"),
-                "update",
-            ),
-            # Resource manipulation
-            (re.compile(r"(^|_)(lock|unlock|restore)_"), "update"),  # State changes
-            # Execute operations (fallback for actions)
-            (re.compile(r"(^|_)(execute|run|call|invoke|batch)_"), "execute"),
-        ]
-
     def extract_principal(self, tool_context: "ToolContext") -> PrincipalCheck:
         """Extract principal information from ADK tool context.
 
@@ -82,16 +45,10 @@ class ContextMapper:
         """
         attributes: dict[str, Any] = {}
 
-        if self.config.include_user_id:
-            attributes["user_id"] = tool_context.user_id
-
-        if self.config.include_agent_name:
-            attributes["agent_name"] = tool_context.agent_name
-
-        if self.config.include_session_id:
-            attributes["session_id"] = tool_context.session.id
-
-        # Add invocation ID for tracking
+        # Always include context identifiers
+        attributes["user_id"] = tool_context.user_id
+        attributes["agent_name"] = tool_context.agent_name
+        attributes["session_id"] = tool_context.session.id
         attributes["invocation_id"] = tool_context.invocation_id
 
         # Extract configured state keys into principal attributes
@@ -215,29 +172,6 @@ class ContextMapper:
             attributes=attributes,
         )
 
-    def extract_action(self, tool: "BaseTool") -> str:
-        """Extract action from tool name.
-
-        Attempts to infer the action from the tool name by matching
-        common verb patterns (read, write, update, delete, execute).
-        Falls back to "execute" if no pattern matches.
-
-        Args:
-            tool: The tool being invoked.
-
-        Returns:
-            Action string (e.g., "read", "write", "execute").
-        """
-        tool_name_lower = tool.name.lower()
-
-        # Try to match action patterns
-        for pattern, action in self._action_patterns:
-            if pattern.search(tool_name_lower):
-                return action
-
-        # Default action
-        return "execute"
-
     def create_check_request(
         self,
         tool: "BaseTool",
@@ -256,7 +190,8 @@ class ContextMapper:
         """
         principal = self.extract_principal(tool_context)
         resource = self.extract_resource(tool, tool_args, tool_context)
-        action = self.extract_action(tool)
+        # Pass tool_args for Bash command analysis
+        action = extract_action(tool.name, tool_args)
 
         return CheckRequest(
             principal=principal,

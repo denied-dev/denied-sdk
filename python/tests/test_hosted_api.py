@@ -19,7 +19,7 @@ allow {
 ```
 
 Setup:
-   export DENIED_URL='https://your-denied-pdp.com'
+   export DENIED_URL='https://app.denied.dev/pdp/123'
    export DENIED_API_KEY='your-denied-api-key'
 
 Run:

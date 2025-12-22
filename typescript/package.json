@@ -41,14 +41,24 @@
   "dependencies": {
     "axios": "^1.8.0"
   },
+  "peerDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/claude-agent-sdk": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "^22.13.0",
     "@typescript-eslint/eslint-plugin": "^8.28.0",
     "@typescript-eslint/parser": "^8.28.0",
+    "dotenv": "^17.2.3",
     "eslint": "^9.0.0",
     "prettier": "^3.4.2",
     "typescript": "^5.8.0",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "zod": "^3.24.1"
   },
   "prettier": {
     "semi": true,
