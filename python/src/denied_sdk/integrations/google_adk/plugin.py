@@ -37,7 +37,8 @@ class AuthorizationPlugin(BasePlugin):
 
         # Custom configuration
         config = AuthorizationConfig(
-            denied_url="https://auth.company.com",
+            denied_uuid="your-uuid",
+            denied_api_key="your-api-key",
             fail_mode="closed",
         )
         plugin = AuthorizationPlugin(config)
@@ -61,6 +62,7 @@ class AuthorizationPlugin(BasePlugin):
 
         self.client = denied_client or AsyncDeniedClient(
             url=self.config.denied_url,
+            uuid=self.config.denied_uuid,
             api_key=self.config.denied_api_key,
             timeout=self.config.timeout_seconds,
         )

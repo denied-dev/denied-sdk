@@ -26,7 +26,8 @@ runner = Runner(
 
 **3. Set environment variables:**
 ```bash
-export DENIED_URL="https://app.denied.dev/pdp/123"
+export DENIED_URL="https://api.denied.dev"
+export DENIED_UUID="your-uuid"
 export DENIED_API_KEY="your-api-key"
 ```
 
@@ -53,7 +54,8 @@ The plugin extracts context and sends to Denied:
 from denied_sdk.integrations.google_adk import AuthorizationConfig, AuthorizationPlugin
 
 config = AuthorizationConfig(
-    denied_url="https://app.denied.dev/pdp/123",
+    denied_url="https://api.denied.dev",
+    denied_uuid="your-uuid",
     denied_api_key="your-key",
     fail_mode="closed",  # or "open" - behavior when Denied is unavailable
     retry_attempts=2,

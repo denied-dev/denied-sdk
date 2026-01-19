@@ -25,19 +25,19 @@
  * 1. Install: pnpm add @anthropic-ai/claude-agent-sdk
  * 2. Set env vars:
  *    export ANTHROPIC_API_KEY='your-key'
+ *    export DENIED_UUID='your-uuid'
  *    export DENIED_API_KEY='your-key'
- *    export DENIED_URL='https://app.denied.dev/pdp/123'
  * 3. Run: npx ts-node examples/claude-agent-sdk/mcp-server-auth.ts
  */
 
-import "dotenv/config";
 import {
-  query,
   createSdkMcpServer,
+  query,
   tool,
-  type SDKMessage,
   type McpSdkServerConfigWithInstance,
+  type SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import "dotenv/config";
 import { z } from "zod";
 import { createDeniedPermissionCallback } from "../../src/integrations/claude-sdk";
 
@@ -125,6 +125,7 @@ async function runScenario(options: ScenarioOptions): Promise<void> {
   const permissionCallback = createDeniedPermissionCallback({
     config: {
       deniedUrl: process.env.DENIED_URL,
+      deniedUuid: process.env.DENIED_UUID,
       deniedApiKey: process.env.DENIED_API_KEY,
       failMode: "closed",
       timeoutSeconds: 15, // Allow for cold starts
@@ -219,8 +220,11 @@ if (!process.env.ANTHROPIC_API_KEY) {
   process.exit(1);
 }
 
-if (!process.env.DENIED_URL) {
-  console.error("DENIED_URL not set");
+if (
+  !process.env.DENIED_URL &&
+  (!process.env.DENIED_UUID || !process.env.DENIED_API_KEY)
+) {
+  console.error("DENIED_URL or DENIED_UUID and DENIED_API_KEY not set");
   process.exit(1);
 }
 

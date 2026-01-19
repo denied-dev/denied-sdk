@@ -5,8 +5,7 @@ from denied_sdk import (
     ResourceCheck,
 )
 
-# Initialize client
-client = DeniedClient(url="http://localhost:8421")
+client = DeniedClient()
 
 # Example 1: Simple check with URIs
 result = client.check(

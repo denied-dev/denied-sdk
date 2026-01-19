@@ -17,6 +17,7 @@ def config():
     """Create test configuration."""
     return AuthorizationConfig(
         denied_url="http://localhost:8421",
+        denied_uuid="test-uuid",
         denied_api_key="test-key",
         fail_mode="closed",
         retry_attempts=2,
@@ -214,6 +215,7 @@ async def test_callback_principal_attributes_without_user_id(mock_client, mock_c
 
     config = AuthorizationConfig(
         denied_url="http://localhost:8421",
+        denied_uuid="test-uuid",
         denied_api_key="test-key",
     )
 

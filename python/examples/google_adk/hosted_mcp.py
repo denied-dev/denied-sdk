@@ -20,7 +20,7 @@ Setup:
 
 2. Set environment variables:
    export GEMINI_API_KEY='your-gemini-key'
-   export DENIED_URL='https://app.denied.dev/pdp/123'
+   export DENIED_UUID='your-uuid'
    export DENIED_API_KEY='your-denied-api-key'
    export COSPEC_MCP_URL='https://mcp.cospec.ai/mcp?deploymentId=YOUR_DEPLOYMENT_ID'
    export COSPEC_API_KEY='your-cospec-api-key'
@@ -70,6 +70,7 @@ async def main():
         # Configure authorization plugin
         config = AuthorizationConfig(
             denied_url=os.getenv("DENIED_URL"),
+            denied_uuid=os.getenv("DENIED_UUID"),
             denied_api_key=os.getenv("DENIED_API_KEY"),
             fail_mode="closed",  # Deny on auth service failure
             # Extract role from session state into principal attributes

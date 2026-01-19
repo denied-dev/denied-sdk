@@ -116,11 +116,15 @@ Both SDKs implement the same authorization check pattern:
 - `DeniedClient` class with context manager support (`__enter__`/`__exit__`)
 - Must call `close()` or use as context manager to clean up httpx connection pool
 - Uses Pydantic models for validation
-- API key passed via `x-api-key` header
+- Decision node UUID passed via `X-Decision-Node-UUID` header
+- API key passed via `X-API-Key` header
+- Check endpoints: `/pdp/check` and `/pdp/check/bulk`
 
 **TypeScript** (`typescript/src/client.ts`):
 - `DeniedClient` class with axios instance
-- API key passed via `x-api-key` header
+- Decision node UUID passed via `X-Decision-Node-UUID` header
+- API key passed via `X-API-Key` header
+- Check endpoints: `/pdp/check` and `/pdp/check/bulk`
 - Promise-based async API
 
 ### Configuration
@@ -128,7 +132,8 @@ Both SDKs implement the same authorization check pattern:
 Both SDKs support configuration via:
 1. Constructor parameters (takes precedence)
 2. Environment variables:
-   - `DENIED_URL`: Server URL (default: `http://localhost:8421`)
+   - `DENIED_URL`: Server URL (default: `https://api.denied.dev`)
+   - `DENIED_UUID`: UUID of specific decision node to use
    - `DENIED_API_KEY`: API key for authentication
 
 ### Schema Architecture
@@ -161,12 +166,14 @@ Python uses string-valued enum, TypeScript uses string literals.
 Both clients expose two methods:
 
 1. **`check()`**: Single authorization check
+   - Sends POST to `/pdp/check` endpoint
    - Accepts optional `principal_uri`/`principalUri` and `resource_uri`/`resourceUri`
    - Accepts optional `principal_attributes`/`principalAttributes` and `resource_attributes`/`resourceAttributes`
    - Default action is `"access"`
    - Returns `CheckResponse`
 
 2. **`bulk_check()`/`bulkCheck()`**: Multiple checks in one request
+   - Sends POST to `/pdp/check/bulk` endpoint
    - Accepts array of `CheckRequest` objects
    - Returns array of `CheckResponse` objects
 
@@ -177,6 +184,7 @@ Both clients expose two methods:
 - Error handling wraps `httpx.HTTPStatusError` with response body in message
 - Uses `model_dump()` to serialize Pydantic models to JSON
 - Uses `model_validate()` to deserialize JSON to Pydantic models
+- Headers built dynamically to include optional API key and decision node UUID
 
 **TypeScript-specific**:
 - Axios error handling wraps errors with HTTP status and response data
@@ -184,6 +192,7 @@ Both clients expose two methods:
 - Exports both types and runtime values from `index.ts`
 - CommonJS module format (`type: "commonjs"` in package.json)
 - Builds to `./dist` directory with type declarations
+- Headers built dynamically to include optional API key and decision node UUID
 
 ## Project Structure
 

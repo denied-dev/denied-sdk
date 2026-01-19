@@ -24,7 +24,7 @@ Create an instance of the `DeniedClient` class to interact with the Denied serve
 import { DeniedClient } from "denied-sdk";
 
 const client = new DeniedClient({
-  url: "https://your-denied-server.com",
+  uuid: "your-uuid-here",
   apiKey: "your-api-key-here",
 });
 ```
@@ -33,13 +33,24 @@ const client = new DeniedClient({
 
 You can also configure the client using environment variables:
 
-- `DENIED_URL` - The base URL of the Denied server
+- `DENIED_URL` - The base URL of the Denied server (default: `https://api.denied.dev`)
+- `DENIED_UUID` - Your UUID of the decision node to use
 - `DENIED_API_KEY` - Your API key for authentication
 
 If these are set, you can initialize the client without parameters:
 
 ```typescript
 const client = new DeniedClient();
+```
+
+For custom or self-hosted instances, you can override the URL:
+
+```typescript
+const client = new DeniedClient({
+  url: "https://example.denied.dev",
+  uuid: "your-uuid-here",
+  apiKey: "your-api-key-here",
+});
 ```
 
 ### Check Permissions
@@ -126,7 +137,8 @@ new DeniedClient(options?: DeniedClientOptions)
 ```
 
 **Options:**
-- `url` (string, optional): The base URL of the Denied server. Defaults to `process.env.DENIED_URL` or `"http://localhost:8421"`
+- `url` (string, optional): The base URL of the Denied server. Defaults to `process.env.DENIED_URL` or `"https://api.denied.dev"`
+- `uuid` (string, optional): The UUID of the specific decision node to use. Defaults to `process.env.DENIED_UUID`
 - `apiKey` (string, optional): The API key for authentication. Defaults to `process.env.DENIED_API_KEY`
 
 #### Methods

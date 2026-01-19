@@ -20,7 +20,7 @@ pip install denied-sdk
 from denied_sdk import DeniedClient
 
 # Initialize the client
-client = DeniedClient(url="http://localhost:8421", api_key="your-api-key")
+client = DeniedClient(api_key="your-api-key")
 
 # Check authorization
 result = client.check(
@@ -38,16 +38,28 @@ if result.reason:
 
 The SDK can be configured using constructor parameters or environment variables:
 
-- **URL**: `url` parameter or `DENIED_URL` environment variable (default: `http://localhost:8421`)
+- **URL**: `url` parameter or `DENIED_URL` environment variable (default: `https://api.denied.dev`)
+- **UUID**: `uuid` parameter or `DENIED_UUID` environment variable
 - **API Key**: `api_key` parameter or `DENIED_API_KEY` environment variable
 
 ```python
 # Using environment variables
 import os
-os.environ["DENIED_URL"] = "https://denied.example.com"
+os.environ["DENIED_UUID"] = "your-uuid"
 os.environ["DENIED_API_KEY"] = "your-api-key"
 
-client = DeniedClient()  # Will use environment variables
+client = DeniedClient()
+
+# To use a custom URL (e.g., self-hosted instance):
+os.environ["DENIED_URL"] = "https://example.denied.dev"
+client = DeniedClient()  # Will use custom URL
+
+# Or pass directly to constructor:
+client = DeniedClient(
+    url="https://example.denied.dev",
+    uuid="your-uuid"
+    api_key="your-api-key",
+)
 ```
 
 ## API Reference

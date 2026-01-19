@@ -13,8 +13,8 @@ Setup:
 
 2. Set environment variables:
    export GEMINI_API_KEY='your-key'
+   export DENIED_UUID='your-uuid'
    export DENIED_API_KEY='your-key'
-   export DENIED_URL='https://app.denied.dev/pdp/123'
 
 3. Run the example:
    python examples/adk_scope_example.py
@@ -60,6 +60,7 @@ async def main():
     # Configure authorization plugin
     config = AuthorizationConfig(
         denied_url=os.getenv("DENIED_URL"),
+        denied_uuid=os.getenv("DENIED_UUID"),
         denied_api_key=os.getenv("DENIED_API_KEY"),
         fail_mode="closed",
         # Extract role from session state into principal attributes
@@ -153,6 +154,12 @@ if __name__ == "__main__":
     # Check for API keys
     if not os.getenv("GEMINI_API_KEY"):
         print("❌ Error: GEMINI_API_KEY environment variable not set")
+        exit(1)
+
+    if not os.getenv("DENIED_URL") and (
+        not os.getenv("DENIED_UUID") or not os.getenv("DENIED_API_KEY")
+    ):
+        print("DENIED_URL or DENIED_UUID and DENIED_API_KEY not set")
         exit(1)
 
     try:

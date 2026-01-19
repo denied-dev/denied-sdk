@@ -12,7 +12,7 @@ async def test_async_client_check(httpx_mock):
     # Mock the Denied API response
     httpx_mock.add_response(
         method="POST",
-        url="http://localhost:8421/check",
+        url="http://localhost:8421/pdp/check",
         json={"allowed": True, "reason": None, "rules": []},
     )
 
@@ -32,7 +32,7 @@ async def test_async_client_check_denied(httpx_mock):
     """Test async check with denial."""
     httpx_mock.add_response(
         method="POST",
-        url="http://localhost:8421/check",
+        url="https://api.denied.dev/pdp/check",
         json={"allowed": False, "reason": "Insufficient permissions", "rules": []},
     )
 
@@ -52,7 +52,7 @@ async def test_async_client_with_attributes(httpx_mock):
     """Test async check with attributes."""
     httpx_mock.add_response(
         method="POST",
-        url="http://localhost:8421/check",
+        url="https://api.denied.dev/pdp/check",
         json={"allowed": True, "reason": None, "rules": []},
     )
 
@@ -74,7 +74,7 @@ async def test_async_client_bulk_check(httpx_mock):
 
     httpx_mock.add_response(
         method="POST",
-        url="http://localhost:8421/check/bulk",
+        url="https://api.denied.dev/pdp/check/bulk",
         json=[
             {"allowed": True, "reason": None, "rules": []},
             {"allowed": False, "reason": "Access denied", "rules": []},

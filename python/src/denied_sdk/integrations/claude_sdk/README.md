@@ -33,7 +33,8 @@ async with ClaudeSDKClient(options) as client:
 
 **3. Set environment variables:**
 ```bash
-export DENIED_URL="https://app.denied.dev/pdp/123"
+export DENIED_URL="https://api.denied.dev"
+export DENIED_UUID="your-uuid"
 export DENIED_API_KEY="your-api-key"
 ```
 
@@ -60,7 +61,7 @@ The callback extracts context and sends to Denied:
 from denied_sdk.integrations.claude_sdk import AuthorizationConfig, create_denied_permission_callback
 
 config = AuthorizationConfig(
-    denied_url="https://app.denied.dev/pdp/123",
+    denied_uuid="your-uuid",
     denied_api_key="your-key",
     fail_mode="closed",     # or "open" - behavior when Denied is unavailable
     retry_attempts=2,

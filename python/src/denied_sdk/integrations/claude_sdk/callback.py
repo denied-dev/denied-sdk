@@ -94,6 +94,7 @@ def create_denied_permission_callback(
     # Create client if not provided
     client = denied_client or AsyncDeniedClient(
         url=effective_config.denied_url,
+        uuid=effective_config.denied_uuid,
         api_key=effective_config.denied_api_key,
         timeout=effective_config.timeout_seconds,
     )

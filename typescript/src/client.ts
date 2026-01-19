@@ -1,12 +1,13 @@
 import axios, { AxiosInstance, AxiosResponse } from "axios";
-import type { CheckRequest, CheckResponse } from "./schemas";
 import { EntityType } from "./enums";
+import type { CheckRequest, CheckResponse } from "./schemas";
 
 /**
  * Options for configuring the DeniedClient
  */
 export interface DeniedClientOptions {
   url?: string;
+  uuid?: string;
   apiKey?: string;
 }
 
@@ -15,6 +16,7 @@ export interface DeniedClientOptions {
  */
 export class DeniedClient {
   private readonly url: string;
+  private readonly uuid: string | undefined;
   private readonly apiKey: string | undefined;
   public readonly client: AxiosInstance;
 
@@ -22,16 +24,21 @@ export class DeniedClient {
    * Creates a new DeniedClient instance.
    *
    * @param options - Configuration options for the client
-   * @param options.url - The base URL of the Denied server (defaults to process.env.DENIED_URL or "http://localhost:8421")
-   * @param options.apiKey - The API key for authenticating with the server (defaults to process.env.DENIED_API_KEY)
+   * @param options.url - The base URL of the Denied server (defaults to process.env.DENIED_URL or "https://api.denied.dev")
+   * @param options.uuid - The UUID of the specific decision node to use (defaults to process.env.DENIED_UUID)
+   * @param options.apiKey - The API key for authenticating with the decision node (defaults to process.env.DENIED_API_KEY)
    */
   constructor(options: DeniedClientOptions = {}) {
-    this.url = options.url || process.env.DENIED_URL || "http://localhost:8421";
+    this.url = options.url || process.env.DENIED_URL || "https://api.denied.dev";
+    this.uuid = options.uuid || process.env.DENIED_UUID;
     this.apiKey = options.apiKey || process.env.DENIED_API_KEY;
 
     const headers: Record<string, string> = {};
     if (this.apiKey) {
-      headers["x-api-key"] = this.apiKey;
+      headers["X-API-Key"] = this.apiKey;
+    }
+    if (this.uuid) {
+      headers["X-Decision-Node-UUID"] = this.uuid;
     }
 
     this.client = axios.create({
@@ -84,7 +91,7 @@ export class DeniedClient {
     };
 
     try {
-      const response = await this.client.post<CheckResponse>("/check", request);
+      const response = await this.client.post<CheckResponse>("/pdp/check", request);
       return this.handleResponse(response);
     } catch (error: unknown) {
       if (typeof error === "object" && error !== null && "response" in error) {
@@ -111,7 +118,7 @@ export class DeniedClient {
   async bulkCheck(checkRequests: CheckRequest[]): Promise<CheckResponse[]> {
     try {
       const response = await this.client.post<CheckResponse[]>(
-        "/check/bulk",
+        "/pdp/check/bulk",
         checkRequests,
       );
       return this.handleResponse(response);
