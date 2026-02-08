@@ -19,9 +19,6 @@ class BaseDeniedClient:
     url : str, optional
         The base URL of the Denied server.
         Defaults to environment variable "DENIED_URL" or "https://api.denied.dev".
-    uuid : str, optional
-        The UUID of the specific decision node to use for all requests.
-        Defaults to environment variable "DENIED_UUID" if not provided.
     api_key : str, optional
         The API key for authenticating with the decision node.
         Defaults to environment variable "DENIED_API_KEY" if not provided.
@@ -35,22 +32,18 @@ class BaseDeniedClient:
     def __init__(
         self,
         url: str | None = None,
-        uuid: str | None = None,
         api_key: str | None = None,
         timeout: float | None = None,
     ) -> None:
         self._url = (
             url if url is not None else os.getenv("DENIED_URL") or self.DEFAULT_URL
         )
-        self._uuid = uuid if uuid is not None else os.getenv("DENIED_UUID")
         self._api_key = api_key if api_key is not None else os.getenv("DENIED_API_KEY")
         self._timeout = timeout if timeout is not None else self.DEFAULT_TIMEOUT
 
     def _build_headers(self) -> dict[str, str]:
         """Build HTTP headers for requests."""
         headers: dict[str, str] = {}
-        if self._uuid is not None:
-            headers["X-Decision-Node-UUID"] = self._uuid
         if self._api_key is not None:
             headers["X-API-Key"] = self._api_key
         return headers
@@ -129,9 +122,6 @@ class DeniedClient(BaseDeniedClient):
     url : str, optional
         The base URL of the Denied server.
         Defaults to environment variable "DENIED_URL" or "https://api.denied.dev".
-    uuid : str, optional
-        The UUID of the specific decision node to use for all requests.
-        Defaults to environment variable "DENIED_UUID" if not provided.
     api_key : str, optional
         The API key for authenticating with the decision node.
         Defaults to environment variable "DENIED_API_KEY" if not provided.
@@ -142,11 +132,10 @@ class DeniedClient(BaseDeniedClient):
     def __init__(
         self,
         url: str | None = None,
-        uuid: str | None = None,
         api_key: str | None = None,
         timeout: float | None = None,
     ) -> None:
-        super().__init__(url=url, uuid=uuid, api_key=api_key, timeout=timeout)
+        super().__init__(url=url, api_key=api_key, timeout=timeout)
         self.client = httpx.Client(
             base_url=self._url,
             headers=self._build_headers(),
@@ -268,9 +257,6 @@ class AsyncDeniedClient(BaseDeniedClient):
     url : str, optional
         The base URL of the Denied server.
         Defaults to environment variable "DENIED_URL" or "https://api.denied.dev".
-    uuid : str, optional
-        The UUID of the specific decision node to use for all requests.
-        Defaults to environment variable "DENIED_UUID" if not provided.
     api_key : str, optional
         The API key for authenticating with the decision node.
         Defaults to environment variable "DENIED_API_KEY" if not provided.
@@ -281,11 +267,10 @@ class AsyncDeniedClient(BaseDeniedClient):
     def __init__(
         self,
         url: str | None = None,
-        uuid: str | None = None,
         api_key: str | None = None,
         timeout: float | None = None,
     ) -> None:
-        super().__init__(url=url, uuid=uuid, api_key=api_key, timeout=timeout)
+        super().__init__(url=url, api_key=api_key, timeout=timeout)
         self.client = httpx.AsyncClient(
             base_url=self._url,
             headers=self._build_headers(),

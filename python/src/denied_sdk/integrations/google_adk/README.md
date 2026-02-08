@@ -5,6 +5,7 @@ Frictionless authorization layer for Google ADK agents. Intercepts tool calls an
 ## Quick Start
 
 **1. Install:**
+
 ```bash
 pip install "denied-sdk[adk]"
 # or with uv
@@ -12,6 +13,7 @@ uv add "denied-sdk[adk]"
 ```
 
 **2. Add to your agent:**
+
 ```python
 from google.adk import Agent, Runner
 from denied_sdk.integrations.google_adk import AuthorizationPlugin
@@ -25,9 +27,9 @@ runner = Runner(
 ```
 
 **3. Set environment variables:**
+
 ```bash
 export DENIED_URL="https://api.denied.dev"
-export DENIED_UUID="your-uuid"
 export DENIED_API_KEY="your-api-key"
 ```
 
@@ -44,6 +46,7 @@ User Request → Agent → AuthorizationPlugin.before_tool_callback()
 ```
 
 The plugin extracts context and sends to Denied:
+
 - **Principal**: `user_id`, `agent_name`, `session_id`, `role` (from session state)
 - **Resource**: `tool_name`, `tool_description`, `tool_input_schema`, tool args, `scope` (from session state)
 - **Action**: Inferred from tool name (`list_*` → read, `create_*` → create, etc.)
@@ -55,7 +58,6 @@ from denied_sdk.integrations.google_adk import AuthorizationConfig, Authorizatio
 
 config = AuthorizationConfig(
     denied_url="https://api.denied.dev",
-    denied_uuid="your-uuid",
     denied_api_key="your-key",
     fail_mode="closed",  # or "open" - behavior when Denied is unavailable
     retry_attempts=2,
@@ -79,6 +81,7 @@ allow {
 ```
 
 Set scope in session state:
+
 ```python
 session = await session_service.create_session(
     app_name="my_app",
@@ -95,6 +98,7 @@ session = await session_service.create_session(
 ## Action Inference
 
 Tool names are mapped to actions:
+
 - `list_*`, `get_*`, `search_*` → **read**
 - `create_*`, `post_*`, `send_*` → **create**
 - `update_*`, `patch_*`, `rename_*` → **update**

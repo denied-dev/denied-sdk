@@ -10,8 +10,6 @@ class AuthorizationConfig(BaseModel):
     Attributes:
         denied_url: URL of the Denied authorization service.
             Defaults to DENIED_URL environment variable.
-        denied_uuid: UUID of the Denied decision node.
-            Defaults to DENIED_UUID environment variable.
         denied_api_key: API key for the Denied service.
             Defaults to DENIED_API_KEY environment variable.
         fail_mode: How to handle authorization service failures.
@@ -25,10 +23,6 @@ class AuthorizationConfig(BaseModel):
     denied_url: str | None = Field(
         default=None,
         description="URL of the Denied authorization service",
-    )
-    denied_uuid: str | None = Field(
-        default=None,
-        description="UUID of the Denied decision node",
     )
     denied_api_key: str | None = Field(
         default=None,
@@ -71,9 +65,6 @@ class AuthorizationConfig(BaseModel):
         """Set defaults from environment variables if not provided."""
         if values.get("denied_url") is None:
             values["denied_url"] = os.getenv("DENIED_URL", "https://api.denied.dev")
-
-        if values.get("denied_uuid") is None:
-            values["denied_uuid"] = os.getenv("DENIED_UUID")
 
         if values.get("denied_api_key") is None:
             values["denied_api_key"] = os.getenv("DENIED_API_KEY")

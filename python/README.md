@@ -39,13 +39,12 @@ if result.reason:
 The SDK can be configured using constructor parameters or environment variables:
 
 - **URL**: `url` parameter or `DENIED_URL` environment variable (default: `https://api.denied.dev`)
-- **UUID**: `uuid` parameter or `DENIED_UUID` environment variable
 - **API Key**: `api_key` parameter or `DENIED_API_KEY` environment variable
 
 ```python
 # Using environment variables
 import os
-os.environ["DENIED_UUID"] = "your-uuid"
+
 os.environ["DENIED_API_KEY"] = "your-api-key"
 
 client = DeniedClient()
@@ -57,7 +56,6 @@ client = DeniedClient()  # Will use custom URL
 # Or pass directly to constructor:
 client = DeniedClient(
     url="https://example.denied.dev",
-    uuid="your-uuid"
     api_key="your-api-key",
 )
 ```
@@ -69,6 +67,7 @@ client = DeniedClient(
 Check whether a principal has permissions to perform an action on a resource.
 
 **Parameters:**
+
 - `principal_uri` (str, optional): The identifier of the principal
 - `resource_uri` (str, optional): The identifier of the resource
 - `principal_attributes` (dict, optional): The attributes of the principal
@@ -107,6 +106,7 @@ result = client.check(
 Perform multiple permission checks in a single request.
 
 **Parameters:**
+
 - `check_requests` (list[CheckRequest]): List of check requests
 
 **Returns:** `list[CheckResponse]`
@@ -139,12 +139,14 @@ for result in results:
 ### EntityType
 
 Enum for entity types:
+
 - `EntityType.Principal`: Represents a principal (user, service, etc.)
 - `EntityType.Resource`: Represents a resource
 
 ### CheckRequest
 
 Authorization check request with:
+
 - `principal`: PrincipalCheck
 - `resource`: ResourceCheck
 - `action`: str
@@ -152,6 +154,7 @@ Authorization check request with:
 ### CheckResponse
 
 Authorization check response with:
+
 - `allowed`: bool
 - `reason`: str | None
 

@@ -45,13 +45,12 @@ def client():
         pass
 
     url = os.getenv("DENIED_URL")
-    uuid = os.getenv("DENIED_UUID")
     api_key = os.getenv("DENIED_API_KEY")
 
-    if not url or not uuid or not api_key:
-        pytest.skip("DENIED_URL and DENIED_UUID and DENIED_API_KEY must be set")
+    if not url or not api_key:
+        pytest.skip("DENIED_URL and DENIED_API_KEY must be set")
 
-    with DeniedClient(url=url, uuid=uuid, api_key=api_key) as client:
+    with DeniedClient(url=url, api_key=api_key) as client:
         yield client
 
 

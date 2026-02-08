@@ -9,12 +9,6 @@ export interface AuthorizationConfig {
   deniedUrl?: string;
 
   /**
-   * UUID of the Denied decision node.
-   * Defaults to DENIED_UUID environment variable.
-   */
-  deniedUuid?: string;
-
-  /**
    * API key for the Denied service.
    * Defaults to DENIED_API_KEY environment variable.
    */
@@ -62,7 +56,6 @@ export interface AuthorizationConfig {
  */
 export interface ResolvedAuthorizationConfig {
   deniedUrl: string;
-  deniedUuid?: string;
   deniedApiKey?: string;
   failMode: "closed" | "open";
   retryAttempts: number;
@@ -84,13 +77,10 @@ export function resolveConfig(
   const deniedUrl =
     config?.deniedUrl ?? process.env.DENIED_URL ?? "https://api.denied.dev";
 
-  const deniedUuid = config?.deniedUuid ?? process.env.DENIED_UUID;
-
   const deniedApiKey = config?.deniedApiKey ?? process.env.DENIED_API_KEY;
 
   return {
     deniedUrl,
-    deniedUuid,
     deniedApiKey,
     failMode: config?.failMode ?? "closed",
     retryAttempts: config?.retryAttempts ?? 2,

@@ -7,7 +7,6 @@ import type { CheckRequest, CheckResponse } from "./schemas";
  */
 export interface DeniedClientOptions {
   url?: string;
-  uuid?: string;
   apiKey?: string;
 }
 
@@ -16,7 +15,6 @@ export interface DeniedClientOptions {
  */
 export class DeniedClient {
   private readonly url: string;
-  private readonly uuid: string | undefined;
   private readonly apiKey: string | undefined;
   public readonly client: AxiosInstance;
 
@@ -25,20 +23,15 @@ export class DeniedClient {
    *
    * @param options - Configuration options for the client
    * @param options.url - The base URL of the Denied server (defaults to process.env.DENIED_URL or "https://api.denied.dev")
-   * @param options.uuid - The UUID of the specific decision node to use (defaults to process.env.DENIED_UUID)
    * @param options.apiKey - The API key for authenticating with the decision node (defaults to process.env.DENIED_API_KEY)
    */
   constructor(options: DeniedClientOptions = {}) {
     this.url = options.url || process.env.DENIED_URL || "https://api.denied.dev";
-    this.uuid = options.uuid || process.env.DENIED_UUID;
     this.apiKey = options.apiKey || process.env.DENIED_API_KEY;
 
     const headers: Record<string, string> = {};
     if (this.apiKey) {
       headers["X-API-Key"] = this.apiKey;
-    }
-    if (this.uuid) {
-      headers["X-Decision-Node-UUID"] = this.uuid;
     }
 
     this.client = axios.create({

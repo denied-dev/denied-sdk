@@ -3,7 +3,6 @@ import { CheckRequest, DeniedClient, EntityType } from "denied-sdk";
 
 async function run(): Promise<void> {
   const client = new DeniedClient({
-    uuid: "your-uuid-here",
     apiKey: "your-api-key-here",
   });
 

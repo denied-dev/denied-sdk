@@ -32,7 +32,6 @@
  * 1. Install: pnpm add @anthropic-ai/claude-agent-sdk denied-sdk
  * 2. Set env vars:
  *    export ANTHROPIC_API_KEY='your-key'
- *    export DENIED_UUID='your-uuid'
  *    export DENIED_API_KEY='your-key'
  * 3. Run: npx ts-node examples/claude-agent-sdk/internal-tools.ts
  */
@@ -60,7 +59,6 @@ async function runScenario(options: ScenarioOptions): Promise<void> {
   const permissionCallback = createDeniedPermissionCallback({
     config: {
       deniedUrl: process.env.DENIED_URL,
-      deniedUuid: process.env.DENIED_UUID,
       deniedApiKey: process.env.DENIED_API_KEY,
       failMode: "closed",
       timeoutSeconds: 15,
@@ -137,11 +135,8 @@ if (!process.env.ANTHROPIC_API_KEY) {
   process.exit(1);
 }
 
-if (
-  !process.env.DENIED_URL &&
-  (!process.env.DENIED_UUID || !process.env.DENIED_API_KEY)
-) {
-  console.error("DENIED_URL or DENIED_UUID and DENIED_API_KEY not set");
+if (!process.env.DENIED_URL && !process.env.DENIED_API_KEY) {
+  console.error("DENIED_URL or DENIED_API_KEY not set");
   process.exit(1);
 }
 

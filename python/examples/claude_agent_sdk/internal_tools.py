@@ -31,7 +31,6 @@ Setup:
 1. Install: pip install denied-sdk[claude-sdk]
 2. Set env vars:
    export ANTHROPIC_API_KEY='your-key'
-   export DENIED_UUID='your-uuid'
    export DENIED_API_KEY='your-key'
 3. Run: python examples/claude_agent_sdk/internal_tools.py
 """
@@ -63,7 +62,6 @@ async def run_scenario(name: str, user_id: str, message: str):
 
     config = AuthorizationConfig(
         denied_url=os.getenv("DENIED_URL"),
-        denied_uuid=os.getenv("DENIED_UUID"),
         denied_api_key=os.getenv("DENIED_API_KEY"),
         fail_mode="closed",
         timeout_seconds=15.0,
@@ -141,10 +139,8 @@ if __name__ == "__main__":
         print("ANTHROPIC_API_KEY not set")
         exit(1)
 
-    if not os.getenv("DENIED_URL") and (
-        not os.getenv("DENIED_UUID") or not os.getenv("DENIED_API_KEY")
-    ):
-        print("DENIED_URL or DENIED_UUID and DENIED_API_KEY not set")
+    if not os.getenv("DENIED_URL") and not os.getenv("DENIED_API_KEY"):
+        print("DENIED_URL or DENIED_API_KEY not set")
         exit(1)
 
     try:
