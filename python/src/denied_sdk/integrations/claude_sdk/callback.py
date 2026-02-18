@@ -160,14 +160,13 @@ def create_denied_permission_callback(
 
         # Handle authorization decision
         if not check_result.decision:
+            reason = check_result.context.reason if check_result.context else None
             logger.info(
                 f"Authorization DENIED for tool={tool_name}, "
                 f"user={effective_config.user_id}, "
-                f"reason={check_result.context.reason}"
+                f"reason={reason or 'No reason'}"
             )
-            return PermissionResultDeny(
-                message=check_result.context.reason or "Authorization denied"
-            )
+            return PermissionResultDeny(message=reason or "Authorization denied")
 
         logger.debug(
             f"Authorization ALLOWED for tool={tool_name}, "

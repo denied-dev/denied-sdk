@@ -131,12 +131,13 @@ class AuthorizationPlugin(BasePlugin):
 
         # Handle authorization decision
         if not check_result.decision:
+            reason = check_result.context.reason if check_result.context else None
             logger.info(
                 f"Authorization DENIED for tool={tool.name}, "
                 f"user={tool_context.user_id}, "
-                f"reason={check_result.context.reason}"
+                f"reason={reason or 'No reason'}"
             )
-            return self._create_denial_response(check_result.context.reason)
+            return self._create_denial_response(reason)
 
         logger.debug(
             f"Authorization ALLOWED for tool={tool.name}, user={tool_context.user_id}"
