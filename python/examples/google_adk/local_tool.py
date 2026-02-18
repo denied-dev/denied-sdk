@@ -155,7 +155,7 @@ if __name__ == "__main__":
         exit(1)
 
     if not os.getenv("DENIED_URL") and not os.getenv("DENIED_API_KEY"):
-        print("DENIED_URL or DENIED_API_KEY not set")
+        print("Neither DENIED_URL nor DENIED_API_KEY is set")
         exit(1)
 
     try:

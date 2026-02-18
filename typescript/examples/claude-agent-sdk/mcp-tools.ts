@@ -219,7 +219,7 @@ if (!process.env.ANTHROPIC_API_KEY) {
 }
 
 if (!process.env.DENIED_URL && !process.env.DENIED_API_KEY) {
-  console.error("DENIED_URL or DENIED_API_KEY not set");
+  console.error("Neither DENIED_URL nor DENIED_API_KEY is set");
   process.exit(1);
 }
 
