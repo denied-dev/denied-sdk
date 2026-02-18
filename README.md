@@ -1,24 +1,16 @@
 # Denied SDK
 
-Official SDKs for Denied authorization platform
+Official SDKs for the [Denied][denied-website] authorization platform.
 
-## Overview
-
-Denied SDK provides lightweight, type-safe clients for integrating Denied authorization into your applications. Make permission checks with a simple API, whether you're checking individual permissions or performing bulk operations.
+Make permission checks with a simple API that follows Authzen Authorization API standard.
 
 ## Available SDKs
 
-- **[Python](./python/README.md)** - Lightweight Python SDK with async support
-- **[TypeScript](./typescript/README.md)** - TypeScript/JavaScript SDK with full type definitions
-
-## Features
-
-- **Simple API** - Check permissions with type+id and optional properties
-- **Bulk Operations** - Perform multiple checks in a single request
-- **Environment Variables** - Configure via constructor or environment
-- **Type Safety** - Full TypeScript support and Python type hints
-- **Lightweight** - Minimal dependencies
+- **[Python](./python/README.md)**: sync and async client with Pydantic validation
+- **[TypeScript](./typescript/README.md)**: promise-based client with full type definitions
 
 ## License
 
-This project is licensed under the Apache 2.0, see [LICENSE](LICENSE) for details.
+Apache-2.0
+
+[denied-website]: https://denied.dev
