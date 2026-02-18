@@ -112,10 +112,10 @@ const results = await client.bulkCheck([
 
 ## Types
 
-**`Subject` / `Resource`** — `type: string`, `id: string`, `properties?: Record<string, unknown>`
-**`Action`** — `name: string`, `properties?: Record<string, unknown>`
-**`CheckRequest`** — `subject`, `action`, `resource`, `context?: Record<string, unknown>`
-**`CheckResponse`** — `decision: boolean`, `context?: { reason?: string; rules?: string[] }`
+- **`Subject` / `Resource`** — `type: string`, `id: string`, `properties?: Record<string, unknown>`
+- **`Action`** — `name: string`, `properties?: Record<string, unknown>`
+- **`CheckRequest`** — `subject`, `action`, `resource`, `context?: Record<string, unknown>`
+- **`CheckResponse`** — `decision: boolean`, `context?: { reason?: string; rules?: string[] }`
 
 ## License
 

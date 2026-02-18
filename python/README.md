@@ -112,10 +112,10 @@ results = client.bulk_check([
 
 ## Types
 
-**`Subject` / `Resource`** — `type: str`, `id: str`, `properties: dict` (optional)
-**`Action`** — `name: str`, `properties: dict` (optional)
-**`CheckRequest`** — `subject`, `action`, `resource`, `context: dict` (optional)
-**`CheckResponse`** — `decision: bool`, `context` (optional: `reason: str`, `rules: list[str]`)
+- **`Subject` / `Resource`** — `type: str`, `id: str`, `properties: dict` (optional)
+- **`Action`** — `name: str`, `properties: dict` (optional)
+- **`CheckRequest`** — `subject`, `action`, `resource`, `context: dict` (optional)
+- **`CheckResponse`** — `decision: bool`, `context` (optional: `reason: str`, `rules: list[str]`)
 
 ## Async Client
 
