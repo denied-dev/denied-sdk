@@ -1,6 +1,5 @@
 import axios, { AxiosInstance, AxiosResponse } from "axios";
-import { EntityType } from "./enums";
-import type { CheckRequest, CheckResponse } from "./schemas";
+import type { Action, CheckRequest, CheckResponse } from "./schemas";
 
 /**
  * Options for configuring the DeniedClient
@@ -52,35 +51,47 @@ export class DeniedClient {
   }
 
   /**
-   * Check whether a principal has permissions to perform an action on a specific resource.
+   * Check whether a subject has permissions to perform an action on a specific resource.
    *
    * @param options - Options for the check request
-   * @param options.principalUri - The identifier of the principal (optional)
-   * @param options.resourceUri - The identifier of the resource (optional)
-   * @param options.principalAttributes - The attributes of the principal (optional)
-   * @param options.resourceAttributes - The attributes of the resource (optional)
-   * @param options.action - The action to check permissions for (optional, defaults to "access")
+   * @param options.subjectType - The type of the subject (e.g., "user", "service")
+   * @param options.subjectId - The unique identifier of the subject scoped to the type
+   * @param options.resourceType - The type of the resource (e.g., "document", "api")
+   * @param options.resourceId - The unique identifier of the resource scoped to the type
+   * @param options.subjectProperties - Additional properties of the subject (optional)
+   * @param options.resourceProperties - Additional properties of the resource (optional)
+   * @param options.action - The action to check permissions for (can be string or Action object, defaults to "access")
+   * @param options.context - Additional context for the authorization check (optional)
    * @returns A promise that resolves to the check response
    */
   async check(options: {
-    principalUri?: string;
-    resourceUri?: string;
-    principalAttributes?: Record<string, unknown>;
-    resourceAttributes?: Record<string, unknown>;
-    action?: string;
+    subjectType: string;
+    subjectId: string;
+    resourceType: string;
+    resourceId: string;
+    subjectProperties?: Record<string, unknown>;
+    resourceProperties?: Record<string, unknown>;
+    action?: string | Action;
+    context?: Record<string, unknown>;
   }): Promise<CheckResponse> {
+    const actionObj: Action =
+      typeof options.action === "string" || options.action === undefined
+        ? { name: options.action || "access" }
+        : options.action;
+
     const request: CheckRequest = {
-      principal: {
-        uri: options.principalUri,
-        attributes: options.principalAttributes || {},
-        type: EntityType.Principal,
+      subject: {
+        type: options.subjectType,
+        id: options.subjectId,
+        properties: options.subjectProperties || {},
       },
       resource: {
-        uri: options.resourceUri,
-        attributes: options.resourceAttributes || {},
-        type: EntityType.Resource,
+        type: options.resourceType,
+        id: options.resourceId,
+        properties: options.resourceProperties || {},
       },
-      action: options.action || "access",
+      action: actionObj,
+      context: options.context,
     };
 
     try {

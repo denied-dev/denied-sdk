@@ -1,7 +1,6 @@
 import axios from "axios";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DeniedClient } from "./client";
-import { EntityType } from "./enums";
 import type { CheckRequest } from "./schemas";
 
 // Mock axios
@@ -54,104 +53,114 @@ describe("DeniedClient API Methods", () => {
     mockedAxios.create.mockReturnValue(mockedAxios as any);
   });
 
-  it("should successfully check with URIs", async () => {
+  it("should successfully check", async () => {
     mockedAxios.post.mockResolvedValue({
-      data: { allowed: true, reason: "Policy allows" },
+      data: { decision: true, context: { reason: "Policy allows" } },
     });
 
     const client = new DeniedClient();
     const response = await client.check({
-      principalUri: "user:alice",
-      resourceUri: "doc:1",
+      subjectType: "user",
+      subjectId: "alice",
+      resourceType: "document",
+      resourceId: "1",
       action: "read",
     });
 
-    expect(response.allowed).toBe(true);
-    expect(response.reason).toBe("Policy allows");
+    expect(response.decision).toBe(true);
+    expect(response.context?.reason).toBe("Policy allows");
     expect(mockedAxios.post).toHaveBeenCalledWith("/pdp/check", {
-      principal: { uri: "user:alice", attributes: {}, type: "principal" },
-      resource: { uri: "doc:1", attributes: {}, type: "resource" },
-      action: "read",
+      subject: { type: "user", id: "alice", properties: {} },
+      resource: { type: "document", id: "1", properties: {} },
+      action: { name: "read" },
+      context: undefined,
     });
   });
 
-  it("should successfully check with attributes", async () => {
+  it("should successfully check with properties", async () => {
     mockedAxios.post.mockResolvedValue({
-      data: { allowed: false },
+      data: { decision: false },
     });
 
     const client = new DeniedClient();
     const response = await client.check({
-      principalAttributes: { role: "guest" },
-      resourceAttributes: { sensitivity: "high" },
+      subjectType: "user",
+      subjectId: "guest",
+      subjectProperties: { role: "guest" },
+      resourceType: "document",
+      resourceId: "secret",
+      resourceProperties: { sensitivity: "high" },
       action: "read",
     });
 
-    expect(response.allowed).toBe(false);
+    expect(response.decision).toBe(false);
     expect(mockedAxios.post).toHaveBeenCalledWith("/pdp/check", {
-      principal: {
-        uri: undefined,
-        attributes: { role: "guest" },
-        type: "principal",
+      subject: {
+        type: "user",
+        id: "guest",
+        properties: { role: "guest" },
       },
       resource: {
-        uri: undefined,
-        attributes: { sensitivity: "high" },
-        type: "resource",
+        type: "document",
+        id: "secret",
+        properties: { sensitivity: "high" },
       },
-      action: "read",
+      action: { name: "read" },
+      context: undefined,
     });
   });
 
   it("should use 'access' as default action", async () => {
     mockedAxios.post.mockResolvedValue({
-      data: { allowed: true },
+      data: { decision: true },
     });
 
     const client = new DeniedClient();
     await client.check({
-      principalUri: "user:alice",
-      resourceUri: "doc:1",
+      subjectType: "user",
+      subjectId: "alice",
+      resourceType: "document",
+      resourceId: "1",
     });
 
     expect(mockedAxios.post).toHaveBeenCalledWith(
       "/pdp/check",
-      expect.objectContaining({ action: "access" }),
+      expect.objectContaining({ action: { name: "access" } }),
     );
   });
 
   it("should successfully bulk check", async () => {
     mockedAxios.post.mockResolvedValue({
-      data: [{ allowed: true }, { allowed: false, reason: "Denied" }],
+      data: [{ decision: true }, { decision: false, context: { reason: "Denied" } }],
     });
 
     const client = new DeniedClient();
     const requests: CheckRequest[] = [
       {
-        principal: {
-          uri: "user:alice",
-          attributes: {},
-          type: EntityType.Principal,
+        subject: {
+          type: "user",
+          id: "alice",
+          properties: {},
         },
-        resource: { uri: "doc:1", attributes: {}, type: EntityType.Resource },
-        action: "read",
+        resource: { type: "document", id: "1", properties: {} },
+        action: { name: "read" },
       },
       {
-        principal: {
-          uri: "user:bob",
-          attributes: {},
-          type: EntityType.Principal,
+        subject: {
+          type: "user",
+          id: "bob",
+          properties: {},
         },
-        resource: { uri: "doc:2", attributes: {}, type: EntityType.Resource },
-        action: "write",
+        resource: { type: "document", id: "2", properties: {} },
+        action: { name: "write" },
       },
     ];
 
     const responses = await client.bulkCheck(requests);
     expect(responses).toHaveLength(2);
-    expect(responses[0].allowed).toBe(true);
-    expect(responses[1].allowed).toBe(false);
-    expect(responses[1].reason).toBe("Denied");
+    expect(responses[0].decision).toBe(true);
+    expect(responses[1].decision).toBe(false);
+    expect(responses[1].context?.reason).toBe("Denied");
   });
 });
 
@@ -174,8 +183,10 @@ describe("DeniedClient Error Handling", () => {
     const client = new DeniedClient();
     await expect(
       client.check({
-        principalUri: "user:alice",
-        resourceUri: "doc:1",
+        subjectType: "user",
+        subjectId: "alice",
+        resourceType: "document",
+        resourceId: "1",
       }),
     ).rejects.toThrow("HTTP 404");
   });
@@ -193,8 +204,10 @@ describe("DeniedClient Error Handling", () => {
     const client = new DeniedClient();
     await expect(
       client.check({
-        principalUri: "user:alice",
-        resourceUri: "doc:1",
+        subjectType: "user",
+        subjectId: "alice",
+        resourceType: "document",
+        resourceId: "1",
       }),
     ).rejects.toThrow("HTTP 500");
   });
@@ -205,8 +218,10 @@ describe("DeniedClient Error Handling", () => {
     const client = new DeniedClient();
     await expect(
       client.check({
-        principalUri: "user:alice",
-        resourceUri: "doc:1",
+        subjectType: "user",
+        subjectId: "alice",
+        resourceType: "document",
+        resourceId: "1",
       }),
     ).rejects.toThrow("Network error");
   });
@@ -224,13 +239,13 @@ describe("DeniedClient Error Handling", () => {
     const client = new DeniedClient();
     const requests: CheckRequest[] = [
       {
-        principal: {
-          uri: "user:alice",
-          attributes: {},
-          type: EntityType.Principal,
+        subject: {
+          type: "user",
+          id: "alice",
+          properties: {},
         },
-        resource: { uri: "doc:1", attributes: {}, type: EntityType.Resource },
-        action: "read",
+        resource: { type: "document", id: "1", properties: {} },
+        action: { name: "read" },
       },
     ];
 
@@ -295,15 +310,5 @@ describe("DeniedClient Configuration", () => {
       headers: {},
       timeout: 60000,
     });
-  });
-});
-
-describe("EntityType", () => {
-  it("should have Principal type", () => {
-    expect(EntityType.Principal).toBe("principal");
-  });
-
-  it("should have Resource type", () => {
-    expect(EntityType.Resource).toBe("resource");
   });
 });

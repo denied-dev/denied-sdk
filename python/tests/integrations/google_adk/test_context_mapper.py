@@ -12,7 +12,7 @@ from denied_sdk.integrations.google_adk.context_mapper import ContextMapper
 def config():
     """Create a config with state key extraction."""
     return AuthorizationConfig(
-        principal_state_keys=["role"],
+        subject_state_keys=["role"],
         resource_state_keys=["scope"],
     )
 
@@ -46,22 +46,23 @@ def mock_tool():
     return tool
 
 
-def test_extract_principal(mapper, mock_tool_context):
-    """Test extracting principal from tool context."""
-    principal = mapper.extract_principal(mock_tool_context)
+def test_extract_subject(mapper, mock_tool_context):
+    """Test extracting subject from tool context."""
+    subject = mapper.extract_subject(mock_tool_context)
 
-    assert principal.uri == "user:alice"
-    assert principal.attributes["user_id"] == "alice"
-    assert principal.attributes["agent_name"] == "file_agent"
-    assert principal.attributes["session_id"] == "session-123"
-    assert principal.attributes["invocation_id"] == "invocation-456"
-    assert principal.attributes["role"] == "user"
-    # scope is a resource attribute, not principal
-    assert "scope" not in principal.attributes
+    assert subject.type == "user"
+    assert subject.id == "alice"
+    assert subject.properties["user_id"] == "alice"
+    assert subject.properties["agent_name"] == "file_agent"
+    assert subject.properties["session_id"] == "session-123"
+    assert subject.properties["invocation_id"] == "invocation-456"
+    assert subject.properties["role"] == "user"
+    # scope is a resource property, not subject
+    assert "scope" not in subject.properties
 
 
-def test_extract_principal_no_state_keys(mapper):
-    """Test extracting principal without configured state keys present."""
+def test_extract_subject_no_state_keys(mapper):
+    """Test extracting subject without configured state keys present."""
     context = Mock()
     context.user_id = "bob"
     context.agent_name = "api_agent"
@@ -70,10 +71,11 @@ def test_extract_principal_no_state_keys(mapper):
     context.state = Mock()
     context.state.to_dict = Mock(return_value={})  # No role in state
 
-    principal = mapper.extract_principal(context)
+    subject = mapper.extract_subject(context)
 
-    assert principal.uri == "user:bob"
-    assert "role" not in principal.attributes
+    assert subject.type == "user"
+    assert subject.id == "bob"
+    assert "role" not in subject.properties
 
 
 def test_extract_resource(mapper, mock_tool, mock_tool_context):
@@ -82,14 +84,15 @@ def test_extract_resource(mapper, mock_tool, mock_tool_context):
 
     resource = mapper.extract_resource(mock_tool, tool_args, mock_tool_context)
 
-    assert resource.uri == "tool:write_file"
-    assert resource.attributes["tool_name"] == "write_file"
-    assert resource.attributes["tool_description"] == "Write content to a file"
-    assert resource.attributes["scope"] == "user"  # Extracted from session state
+    assert resource.type == "tool"
+    assert resource.id == "write_file"
+    assert resource.properties["tool_name"] == "write_file"
+    assert resource.properties["tool_description"] == "Write content to a file"
+    assert resource.properties["scope"] == "user"  # Extracted from session state
     # All tool args should be in tool_input.values
-    assert "tool_input" in resource.attributes
-    assert resource.attributes["tool_input"]["values"]["file_path"] == "/etc/passwd"
-    assert resource.attributes["tool_input"]["values"]["content"] == "secret"
+    assert "tool_input" in resource.properties
+    assert resource.properties["tool_input"]["values"]["file_path"] == "/etc/passwd"
+    assert resource.properties["tool_input"]["values"]["content"] == "secret"
 
 
 def test_extract_resource_with_metadata(mapper, mock_tool_context):
@@ -101,9 +104,12 @@ def test_extract_resource_with_metadata(mapper, mock_tool_context):
 
     resource = mapper.extract_resource(tool, {}, mock_tool_context)
 
-    assert resource.uri == "tool:api_call"
-    assert resource.attributes["api_version"] == "v2"
-    assert resource.attributes["auth_required"] is True
+    assert resource.type == "tool"
+    assert resource.id == "api_call"
+    assert resource.properties["tool_name"] == "api_call"
+    assert resource.properties["tool_description"] == "Call external API"
+    assert resource.properties["api_version"] == "v2"
+    assert resource.properties["auth_required"] is True
 
 
 def test_extract_resource_all_args_captured(mapper, mock_tool, mock_tool_context):
@@ -118,7 +124,7 @@ def test_extract_resource_all_args_captured(mapper, mock_tool, mock_tool_context
     resource = mapper.extract_resource(mock_tool, tool_args, mock_tool_context)
 
     # All args should be in tool_input.values
-    values = resource.attributes["tool_input"]["values"]
+    values = resource.properties["tool_input"]["values"]
     assert values["resource_id"] == "res-123"
     assert values["document_id"] == "doc-456"
     assert values["path"] == "/var/log/app.log"
@@ -141,12 +147,12 @@ def test_extract_resource_with_mcp_schema(mapper, mock_tool_context):
     resource = mapper.extract_resource(tool, tool_args, mock_tool_context)
 
     # Should have both schema and values in tool_input
-    assert "tool_input" in resource.attributes
-    assert resource.attributes["tool_input"]["schema"] == {
+    assert "tool_input" in resource.properties
+    assert resource.properties["tool_input"]["schema"] == {
         "type": "object",
         "properties": {"query": {"type": "string"}},
     }
-    assert resource.attributes["tool_input"]["values"] == {"query": "test search"}
+    assert resource.properties["tool_input"]["values"] == {"query": "test search"}
 
 
 def test_extract_resource_with_function_schema(mapper, mock_tool_context):
@@ -167,8 +173,8 @@ def test_extract_resource_with_function_schema(mapper, mock_tool_context):
     resource = mapper.extract_resource(tool, tool_args, mock_tool_context)
 
     # Should have schema extracted from function signature
-    assert "tool_input" in resource.attributes
-    schema = resource.attributes["tool_input"]["schema"]
+    assert "tool_input" in resource.properties
+    schema = resource.properties["tool_input"]["schema"]
     assert "name" in schema
     assert schema["name"]["type"] == "str"
     assert schema["name"]["required"] is True
@@ -177,7 +183,7 @@ def test_extract_resource_with_function_schema(mapper, mock_tool_context):
     assert schema["count"]["required"] is False
     assert schema["count"]["default"] == 10
     # Values should be captured
-    assert resource.attributes["tool_input"]["values"] == {"name": "test", "count": 5}
+    assert resource.properties["tool_input"]["values"] == {"name": "test", "count": 5}
 
 
 def test_create_check_request(mapper, mock_tool, mock_tool_context):
@@ -186,20 +192,23 @@ def test_create_check_request(mapper, mock_tool, mock_tool_context):
 
     request = mapper.create_check_request(mock_tool, tool_args, mock_tool_context)
 
-    # Check principal
-    assert request.principal.uri == "user:alice"
-    assert request.principal.attributes["role"] == "user"
+    # Check subject
+    assert request.subject.type == "user"
+    assert request.subject.id == "alice"
+    assert request.subject.properties["role"] == "user"
 
     # Check resource
-    assert request.resource.uri == "tool:write_file"
+    assert request.resource.type == "tool"
+    assert request.resource.id == "write_file"
+    assert request.resource.properties["tool_name"] == "write_file"
     assert (
-        request.resource.attributes["tool_input"]["values"]["file_path"]
+        request.resource.properties["tool_input"]["values"]["file_path"]
         == "/home/user/data.txt"
     )
-    assert request.resource.attributes["scope"] == "user"
+    assert request.resource.properties["scope"] == "user"
 
     # Check action
-    assert request.action == "create"
+    assert request.action.name == "create"
 
 
 def test_config_disable_tool_args():
@@ -224,4 +233,4 @@ def test_config_disable_tool_args():
     tool.custom_metadata = None
 
     resource = mapper.extract_resource(tool, {"file_path": "/test"}, context)
-    assert "tool_input" not in resource.attributes
+    assert "tool_input" not in resource.properties

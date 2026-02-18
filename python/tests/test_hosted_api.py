@@ -4,22 +4,22 @@ Expected Rego Policy:
 ```rego
 # User policy
 allow {
-    input.principal.attributes.role == "user"
-    input.resource.attributes.scope == "user"
-    input.action == "read"
+    input.subject.properties.role == "user"
+    input.resource.properties.scope == "user"
+    input.action.name == "read"
 }
 
 # Admin policy
 allow {
-    input.principal.attributes.role == "admin"
-    input.action == "read"
+    input.subject.properties.role == "admin"
+    input.action.name == "read"
     allowed_scopes := ["user", "admin"]
-    input.resource.attributes.scope == allowed_scopes[_]
+    input.resource.properties.scope == allowed_scopes[_]
 }
 ```
 
 Setup:
-   export DENIED_URL='https://app.denied.dev/pdp/123'
+   export DENIED_URL='https://api.test.denied.dev'
    export DENIED_API_KEY='your-denied-api-key'
 
 Run:
@@ -57,24 +57,32 @@ def client():
 def test_alice_user_read_user_scope(client):
     """Test alice (role=user) reading user-scoped resource."""
     response = client.check(
-        principal_uri="user:alice",
-        principal_attributes={"role": "user"},
-        resource_uri="tool:github_get_issues",
-        resource_attributes={"scope": "user"},
+        subject_type="user",
+        subject_id="alice",
+        subject_properties={"role": "user"},
+        resource_type="tool",
+        resource_id="github_get_issues",
+        resource_properties={"scope": "user"},
         action="read",
     )
 
-    print(f"\nAlice result: allowed={response.allowed}, reason={response.reason}")
+    print(
+        f"\nAlice result: decision={response.decision}, reason={response.context.reason}"
+    )
 
 
 def test_dude_user_read_user_scope(client):
     """Test dude (role=user) reading user-scoped resource - dude doesn't exist in DB."""
     response = client.check(
-        principal_uri="user:dude",
-        principal_attributes={"role": "user"},
-        resource_uri="tool:github_get_issues",
-        resource_attributes={"scope": "user"},
+        subject_type="user",
+        subject_id="dude",
+        subject_properties={"role": "user"},
+        resource_type="tool",
+        resource_id="github_get_issues",
+        resource_properties={"scope": "user"},
         action="read",
     )
 
-    print(f"\nDude result: allowed={response.allowed}, reason={response.reason}")
+    print(
+        f"\nDude result: decision={response.decision}, reason={response.context.reason}"
+    )

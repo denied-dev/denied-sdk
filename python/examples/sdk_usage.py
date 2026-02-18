@@ -1,53 +1,42 @@
-from denied_sdk import (
-    CheckRequest,
-    DeniedClient,
-    PrincipalCheck,
-    ResourceCheck,
-)
+from denied_sdk import Action, CheckRequest, DeniedClient, Resource, Subject
 
 client = DeniedClient()
 
-# Example 1: Simple check with URIs
+# Example 1: Simple check
 result = client.check(
-    principal_uri="user:alice",
-    resource_uri="document:secret",
+    subject_type="user",
+    subject_id="alice",
+    resource_type="document",
+    resource_id="secret",
     action="read",
 )
-print(f"Allowed: {result.allowed}")
+print(f"Decision: {result.decision}")
 
-# Example 2: Check with attributes
+# Example 2: Check with additional properties
 result = client.check(
-    principal_attributes={"role": "admin"},
-    resource_attributes={"type": "document"},
+    subject_type="user",
+    subject_id="alice",
+    resource_type="document",
+    resource_id="secret",
+    subject_properties={"role": "admin"},
+    resource_properties={"classification": "secret"},
     action="write",
 )
-print(f"Allowed: {result.allowed}, Reason: {result.reason}")
+print(f"Decision: {result.decision}, Reason: {result.context.reason}")
 
 # Example 3: Bulk check
 requests = [
     CheckRequest(
-        principal=PrincipalCheck(
-            uri="user:alice",
-            attributes={},
-        ),
-        resource=ResourceCheck(
-            uri="document:1",
-            attributes={},
-        ),
-        action="read",
+        subject=Subject(type="user", id="alice"),
+        resource=Resource(type="document", id="1"),
+        action=Action(name="read"),
     ),
     CheckRequest(
-        principal=PrincipalCheck(
-            uri=None,
-            attributes={"role": "viewer"},
-        ),
-        resource=ResourceCheck(
-            uri=None,
-            attributes={"type": "public"},
-        ),
-        action="access",
+        subject=Subject(type="user", id="bob", properties={"role": "viewer"}),
+        resource=Resource(type="document", id="1", properties={"visibility": "public"}),
+        action=Action(name="access"),
     ),
 ]
 results = client.bulk_check(requests)
 for i, result in enumerate(results):
-    print(f"Check {i + 1}: {result.allowed}")
+    print(f"Check {i + 1}: {result.decision}")

@@ -1,53 +1,53 @@
-import { describe, it, expect } from "vitest";
-import { ContextMapper } from "./context-mapper";
+import { describe, expect, it } from "vitest";
 import { resolveConfig } from "./config";
-import { EntityType } from "../../enums";
+import { ContextMapper } from "./context-mapper";
 
 describe("ContextMapper", () => {
-  describe("extractPrincipal", () => {
-    it("should create principal with user ID", () => {
+  describe("extractSubject", () => {
+    it("should create subject with user ID", () => {
       const config = resolveConfig({ userId: "user-123" });
       const mapper = new ContextMapper(config);
 
-      const principal = mapper.extractPrincipal();
+      const subject = mapper.extractSubject();
 
-      expect(principal.type).toBe(EntityType.Principal);
-      expect(principal.uri).toBe("user:user-123");
-      expect(principal.attributes).toEqual({ user_id: "user-123" });
+      expect(subject.type).toBe("user");
+      expect(subject.id).toBe("user-123");
+      expect(subject.properties).toEqual({ user_id: "user-123" });
     });
 
-    it("should create principal with session ID", () => {
+    it("should create subject with session ID", () => {
       const config = resolveConfig({
         userId: "user-123",
         sessionId: "session-456",
       });
       const mapper = new ContextMapper(config);
 
-      const principal = mapper.extractPrincipal();
+      const subject = mapper.extractSubject();
 
-      expect(principal.attributes).toEqual({
+      expect(subject.properties).toEqual({
         user_id: "user-123",
         session_id: "session-456",
       });
     });
 
-    it("should use default principal ID when user ID not provided", () => {
+    it("should use default subject ID when user ID not provided", () => {
       const config = resolveConfig({});
       const mapper = new ContextMapper(config);
 
-      const principal = mapper.extractPrincipal();
+      const subject = mapper.extractSubject();
 
-      expect(principal.uri).toBe("user:claude-agent");
-      expect(principal.attributes).toBeUndefined();
+      expect(subject.type).toBe("user");
+      expect(subject.id).toBe("claude-agent");
+      expect(subject.properties).toBeUndefined();
     });
 
-    it("should include custom principal attributes", () => {
+    it("should include custom subject properties", () => {
       const config = resolveConfig({ userId: "user-123" });
       const mapper = new ContextMapper(config, { role: "admin", team: "engineering" });
 
-      const principal = mapper.extractPrincipal();
+      const subject = mapper.extractSubject();
 
-      expect(principal.attributes).toEqual({
+      expect(subject.properties).toEqual({
         user_id: "user-123",
         role: "admin",
         team: "engineering",
@@ -62,9 +62,9 @@ describe("ContextMapper", () => {
 
       const resource = mapper.extractResource("Read", {});
 
-      expect(resource.type).toBe(EntityType.Resource);
-      expect(resource.uri).toBe("tool:Read");
-      expect(resource.attributes).toEqual({ tool_name: "Read" });
+      expect(resource.type).toBe("tool");
+      expect(resource.id).toBe("Read");
+      expect(resource.properties).toEqual({ tool_name: "Read" });
     });
 
     it("should include tool input when extractToolArgs is true", () => {
@@ -76,7 +76,7 @@ describe("ContextMapper", () => {
         content: "hello",
       });
 
-      expect(resource.attributes).toEqual({
+      expect(resource.properties).toEqual({
         tool_name: "Write",
         tool_input: {
           values: {
@@ -96,7 +96,7 @@ describe("ContextMapper", () => {
         content: "hello",
       });
 
-      expect(resource.attributes).toEqual({ tool_name: "Write" });
+      expect(resource.properties).toEqual({ tool_name: "Write" });
     });
 
     it("should not include tool input when input is empty", () => {
@@ -105,16 +105,16 @@ describe("ContextMapper", () => {
 
       const resource = mapper.extractResource("Read", {});
 
-      expect(resource.attributes).toEqual({ tool_name: "Read" });
+      expect(resource.properties).toEqual({ tool_name: "Read" });
     });
 
-    it("should include custom resource attributes", () => {
+    it("should include custom resource properties", () => {
       const config = resolveConfig({});
       const mapper = new ContextMapper(config, {}, { scope: "project", env: "prod" });
 
       const resource = mapper.extractResource("Read", {});
 
-      expect(resource.attributes).toEqual({
+      expect(resource.properties).toEqual({
         tool_name: "Read",
         scope: "project",
         env: "prod",
@@ -131,33 +131,33 @@ describe("ContextMapper", () => {
         file_path: "/test.txt",
       });
 
-      expect(request.principal.type).toBe(EntityType.Principal);
-      expect(request.principal.uri).toBe("user:user-123");
-      expect(request.principal.attributes).toEqual({
+      expect(request.subject.type).toBe("user");
+      expect(request.subject.id).toBe("user-123");
+      expect(request.subject.properties).toEqual({
         user_id: "user-123",
         role: "admin",
       });
 
-      expect(request.resource.type).toBe(EntityType.Resource);
-      expect(request.resource.uri).toBe("tool:Write");
-      expect(request.resource.attributes).toEqual({
+      expect(request.resource.type).toBe("tool");
+      expect(request.resource.id).toBe("Write");
+      expect(request.resource.properties).toEqual({
         tool_name: "Write",
         scope: "project",
         tool_input: { values: { file_path: "/test.txt" } },
       });
 
-      expect(request.action).toBe("create"); // Write maps to create
+      expect(request.action.name).toBe("create"); // Write maps to create
     });
 
     it("should extract correct action for different tools", () => {
       const config = resolveConfig({});
       const mapper = new ContextMapper(config);
 
-      expect(mapper.createCheckRequest("Read", {}).action).toBe("read");
-      expect(mapper.createCheckRequest("Write", {}).action).toBe("create");
-      expect(mapper.createCheckRequest("Edit", {}).action).toBe("update");
-      expect(mapper.createCheckRequest("Bash", {}).action).toBe("execute");
-      expect(mapper.createCheckRequest("delete_file", {}).action).toBe("delete");
+      expect(mapper.createCheckRequest("Read", {}).action.name).toBe("read");
+      expect(mapper.createCheckRequest("Write", {}).action.name).toBe("create");
+      expect(mapper.createCheckRequest("Edit", {}).action.name).toBe("update");
+      expect(mapper.createCheckRequest("Bash", {}).action.name).toBe("execute");
+      expect(mapper.createCheckRequest("delete_file", {}).action.name).toBe("delete");
     });
   });
 });

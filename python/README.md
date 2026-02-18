@@ -24,14 +24,15 @@ client = DeniedClient(api_key="your-api-key")
 
 # Check authorization
 result = client.check(
-    principal_uri="user:alice",
-    resource_uri="document:secret",
+    subject_type="user",
+    subject_id="alice",
+    resource_type="document",
+    resource_id="secret",
     action="read"
 )
 
-print(f"Allowed: {result.allowed}")
-if result.reason:
-    print(f"Reason: {result.reason}")
+print(f"Decision: {result.decision}")
+print(f"Reason: {result.context.reason}")
 ```
 
 ## Configuration
@@ -64,39 +65,39 @@ client = DeniedClient(
 
 ### `check()`
 
-Check whether a principal has permissions to perform an action on a resource.
+Check whether a subject has permissions to perform an action on a resource.
 
 **Parameters:**
 
-- `principal_uri` (str, optional): The identifier of the principal
-- `resource_uri` (str, optional): The identifier of the resource
-- `principal_attributes` (dict, optional): The attributes of the principal
-- `resource_attributes` (dict, optional): The attributes of the resource
+- `subject_type` (str, optional): The type of the subject
+- `subject_id` (str, optional): The identifier of the subject
+- `resource_type` (str, optional): The type of the resource
+- `resource_id` (str, optional): The identifier of the resource
+- `subject_properties` (dict, optional): The properties of the subject
+- `resource_properties` (dict, optional): The properties of the resource
 - `action` (str, optional): The action to check (default: "access")
 
-**Returns:** `CheckResponse` with `allowed` (bool) and optional `reason` (str)
+**Returns:** `CheckResponse` with `decision` (bool) and `context` (`CheckResponseContext`)
 
 **Examples:**
 
 ```python
-# Check with URIs
+# Check with type and id
 result = client.check(
-    principal_uri="user:alice",
-    resource_uri="document:123",
+    subject_type="user",
+    subject_id="alice",
+    resource_type="document",
+    resource_id="123",
     action="read"
 )
 
-# Check with attributes
+# Check with properties
 result = client.check(
-    principal_attributes={"role": "admin"},
-    resource_attributes={"type": "document", "classification": "secret"},
-    action="write"
-)
-
-# Mix URIs and attributes
-result = client.check(
-    principal_uri="user:bob",
-    resource_attributes={"type": "public"},
+    subject_type="user",
+    subject_id="bob",
+    resource_type="document",
+    resource_id="123",
+    resource_properties={"visibility": "public"},
     action="access"
 )
 ```
@@ -114,49 +115,43 @@ Perform multiple permission checks in a single request.
 **Example:**
 
 ```python
-from denied_sdk import CheckRequest, PrincipalCheck, ResourceCheck, EntityType
+from denied_sdk import Action, CheckRequest, Subject, Resource
 
 requests = [
     CheckRequest(
-        principal=PrincipalCheck(uri="user:alice", attributes={}),
-        resource=ResourceCheck(uri="document:1", attributes={}),
-        action="read"
+        subject=Subject(type="user", id="alice", properties={}),
+        resource=Resource(type="document", id="1", properties={}),
+        action=Action(name="read")
     ),
     CheckRequest(
-        principal=PrincipalCheck(uri=None, attributes={"role": "viewer"}),
-        resource=ResourceCheck(uri=None, attributes={"type": "public"}),
-        action="access"
+        subject=Subject(type="user", id="bob", properties={"role": "viewer"}),
+        resource=Resource(type="document", id="1", properties={"visibility": "public"}),
+        action=Action(name="access")
     ),
 ]
 
 results = client.bulk_check(requests)
 for result in results:
-    print(f"Allowed: {result.allowed}")
+    print(f"Decision: {result.decision}")
 ```
-
-## Types
-
-### EntityType
-
-Enum for entity types:
-
-- `EntityType.Principal`: Represents a principal (user, service, etc.)
-- `EntityType.Resource`: Represents a resource
 
 ### CheckRequest
 
 Authorization check request with:
 
-- `principal`: PrincipalCheck
-- `resource`: ResourceCheck
-- `action`: str
+- `subject`: Subject
+- `resource`: Resource
+- `action`: Action
+- `context`: dict | None
 
 ### CheckResponse
 
 Authorization check response with:
 
-- `allowed`: bool
-- `reason`: str | None
+- `decision`: bool
+- `context`: `CheckResponseContext`:
+  - `reason`: str | None
+  - `rules`: list[str] | None
 
 ## Requirements
 

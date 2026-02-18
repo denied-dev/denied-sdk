@@ -4,7 +4,7 @@
 
 import type { CanUseTool, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import { DeniedClient } from "../../client";
-import type { CheckResponse } from "../../schemas";
+import type { CheckRequest, CheckResponse } from "../../schemas";
 import type { AuthorizationConfig, ResolvedAuthorizationConfig } from "./config";
 import { resolveConfig } from "./config";
 import { ContextMapper } from "./context-mapper";
@@ -26,26 +26,26 @@ export interface CreatePermissionCallbackOptions {
   deniedClient?: DeniedClient;
 
   /**
-   * User ID for principal identification. Overrides config.userId.
+   * User ID for subject identification. Overrides config.userId.
    */
   userId?: string;
 
   /**
-   * Session ID for principal attributes. Overrides config.sessionId.
+   * Session ID for subject properties. Overrides config.sessionId.
    */
   sessionId?: string;
 
   /**
-   * Custom attributes to include in the principal (e.g., \{ role: "admin" \}).
+   * Custom properties to include in the subject (e.g., \{ role: "admin" \}).
    * These are merged with userId/sessionId.
    */
-  principalAttributes?: Record<string, unknown>;
+  subjectProperties?: Record<string, unknown>;
 
   /**
-   * Custom attributes to include in the resource (e.g., \{ scope: "user" \}).
+   * Custom properties to include in the resource (e.g., \{ scope: "user" \}).
    * These are merged with toolName/toolInput.
    */
-  resourceAttributes?: Record<string, unknown>;
+  resourceProperties?: Record<string, unknown>;
 }
 
 /**
@@ -58,21 +58,20 @@ export interface CreatePermissionCallbackOptions {
  */
 async function checkWithRetry(
   client: DeniedClient,
-  checkRequest: {
-    principal: { uri?: string; attributes?: Record<string, unknown> };
-    resource: { uri?: string; attributes?: Record<string, unknown> };
-    action: string;
-  },
+  checkRequest: CheckRequest,
   config: ResolvedAuthorizationConfig,
 ): Promise<CheckResponse | null> {
   for (let attempt = 0; attempt <= config.retryAttempts; attempt++) {
     try {
       return await client.check({
-        principalUri: checkRequest.principal.uri,
-        principalAttributes: checkRequest.principal.attributes,
-        resourceUri: checkRequest.resource.uri,
-        resourceAttributes: checkRequest.resource.attributes,
+        subjectType: checkRequest.subject.type,
+        subjectId: checkRequest.subject.id,
+        subjectProperties: checkRequest.subject.properties,
+        resourceType: checkRequest.resource.type,
+        resourceId: checkRequest.resource.id,
+        resourceProperties: checkRequest.resource.properties,
         action: checkRequest.action,
+        context: checkRequest.context,
       });
     } catch (error) {
       const isFinalAttempt = attempt === config.retryAttempts;
@@ -118,8 +117,8 @@ async function checkWithRetry(
  * // Create the callback with user context, role, and resource scope
  * const permissionCallback = createDeniedPermissionCallback({
  *   userId: "user-123",
- *   principalAttributes: { role: "user" },
- *   resourceAttributes: { scope: "user" },
+ *   subjectProperties: { role: "user" },
+ *   resourceProperties: { scope: "user" },
  * });
  *
  * // Use with Claude Agent SDK
@@ -153,9 +152,9 @@ export function createDeniedPermissionCallback(
 
   const effectiveConfig = resolveConfig(configOverrides);
 
-  // Store attributes for the mapper
-  const effectivePrincipalAttributes = options.principalAttributes ?? {};
-  const effectiveResourceAttributes = options.resourceAttributes ?? {};
+  // Store properties for the mapper
+  const effectiveSubjectProperties = options.subjectProperties ?? {};
+  const effectiveResourceProperties = options.resourceProperties ?? {};
 
   // Create client if not provided
   const client =
@@ -167,8 +166,8 @@ export function createDeniedPermissionCallback(
 
   const mapper = new ContextMapper(
     effectiveConfig,
-    effectivePrincipalAttributes,
-    effectiveResourceAttributes,
+    effectiveSubjectProperties,
+    effectiveResourceProperties,
   );
 
   /**
@@ -212,10 +211,10 @@ export function createDeniedPermissionCallback(
     }
 
     // Handle authorization decision
-    if (!checkResult.allowed) {
+    if (!checkResult.decision) {
       return {
         behavior: "deny",
-        message: checkResult.reason ?? "Authorization denied",
+        message: checkResult.context?.reason || "Authorization denied",
       };
     }
 

@@ -52,31 +52,23 @@ const client = new DeniedClient({
 
 ### Check Permissions
 
-Check if a principal has permission to perform an action on a resource:
+Check if a subject has permission to perform an action on a resource:
 
 ```typescript
 async function checkPermission() {
   const response = await client.check({
-    principalAttributes: { role: "admin" },
-    resourceAttributes: { type: "confidential" },
+    subjectType: "user",
+    subjectId: "admin",
+    subjectProperties: { role: "admin" },
+    resourceType: "document",
+    resourceId: "confidential-doc",
+    resourceProperties: { classification: "confidential" },
     action: "read",
   });
 
-  console.log(`Is allowed: ${response.allowed}`);
-  if (response.reason) {
-    console.log(`Reason: ${response.reason}`);
-  }
+  console.log(`Decision: ${response.decision}`);
+  console.log(`Reason: ${response.context?.reason || "No reason"}`);
 }
-```
-
-You can also use URIs to identify principals and resources:
-
-```typescript
-const response = await client.check({
-  principalUri: "user:john.doe",
-  resourceUri: "document:project-plan",
-  action: "write",
-});
 ```
 
 ### Bulk Check
@@ -84,41 +76,41 @@ const response = await client.check({
 Perform multiple permission checks in a single request:
 
 ```typescript
-import { CheckRequest, EntityType } from "denied-sdk";
+import { CheckRequest } from "denied-sdk";
 
 async function bulkCheckPermissions() {
   const requests: CheckRequest[] = [
     {
-      principal: {
-        uri: "user:alice",
-        attributes: { role: "editor" },
-        type: EntityType.Principal,
+      subject: {
+        type: "user",
+        id: "alice",
+        properties: { role: "editor" },
       },
       resource: {
-        uri: "document:report",
-        attributes: { classification: "public" },
-        type: EntityType.Resource,
+        type: "document",
+        id: "report",
+        properties: { classification: "public" },
       },
-      action: "read",
+      action: { name: "read" },
     },
     {
-      principal: {
-        uri: "user:bob",
-        attributes: { role: "viewer" },
-        type: EntityType.Principal,
+      subject: {
+        type: "user",
+        id: "bob",
+        properties: { role: "viewer" },
       },
       resource: {
-        uri: "document:report",
-        attributes: { classification: "confidential" },
-        type: EntityType.Resource,
+        type: "document",
+        id: "report",
+        properties: { classification: "confidential" },
       },
-      action: "write",
+      action: { name: "write" },
     },
   ];
 
   const responses = await client.bulkCheck(requests);
   responses.forEach((response, index) => {
-    console.log(`Check ${index + 1}: Allowed = ${response.allowed}`);
+    console.log(`Check ${index + 1}: Decision = ${response.decision}`);
   });
 }
 ```
@@ -146,20 +138,24 @@ new DeniedClient(options?: DeniedClientOptions)
 check(options: CheckOptions): Promise<CheckResponse>
 ```
 
-Check if a principal has permission to perform an action on a resource.
+Check if a subject has permission to perform an action on a resource.
 
 **Parameters:**
 
-- `principalUri` (string, optional): URI of the principal
-- `resourceUri` (string, optional): URI of the resource
-- `principalAttributes` (Record<string, string>, optional): Attributes of the principal
-- `resourceAttributes` (Record<string, string>, optional): Attributes of the resource
-- `action` (string, optional): The action to check (defaults to "access")
+- `subjectType` (string): The type of the subject
+- `subjectId` (string): The unique identifier of the subject scoped to the type
+- `subjectProperties` (Record<string, unknown>, optional): Additional properties of the subject
+- `resourceType` (string): The type of the resource
+- `resourceId` (string): The unique identifier of the resource scoped to the type
+- `resourceProperties` (Record<string, unknown>, optional): Additional properties of the resource
+- `action` (string | Action, optional): The action to check (defaults to "access")
 
 **Returns:** Promise<CheckResponse>
 
-- `allowed` (boolean): Whether the action is allowed
-- `reason` (string, optional): Reason for the decision
+- `decision` (boolean): Whether the action is allowed
+- `context` (CheckResponseContext, optional): Context for the decision
+  - `reason` (string, optional): Reason for the decision
+  - `rules` (string[], optional): Rules that triggered the decision
 
 ##### bulkCheck()
 
@@ -181,9 +177,10 @@ Perform multiple permission checks in a single request.
 
 ```typescript
 interface CheckRequest {
-  principal: PrincipalCheck;
-  resource: ResourceCheck;
-  action: string;
+  subject: Subject;
+  resource: Resource;
+  action: Action;
+  context?: Record<string, unknown>;
 }
 ```
 
@@ -191,17 +188,8 @@ interface CheckRequest {
 
 ```typescript
 interface CheckResponse {
-  allowed: boolean;
-  reason?: string;
-}
-```
-
-### EntityType
-
-```typescript
-enum EntityType {
-  Resource = "resource",
-  Principal = "principal",
+  decision: boolean;
+  context?: CheckResponseContext;
 }
 ```
 

@@ -13,7 +13,7 @@ Denied SDK provides lightweight, type-safe clients for integrating Denied author
 
 ## Features
 
-- **Simple API** - Check permissions with URIs, attributes, or both
+- **Simple API** - Check permissions with type+id and optional properties
 - **Bulk Operations** - Perform multiple checks in a single request
 - **Environment Variables** - Configure via constructor or environment
 - **Type Safety** - Full TypeScript support and Python type hints

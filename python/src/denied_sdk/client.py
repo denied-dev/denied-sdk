@@ -3,7 +3,7 @@ from typing import Any
 
 import httpx
 
-from .schemas import CheckRequest, CheckResponse, PrincipalCheck, ResourceCheck
+from .schemas import Action, CheckRequest, CheckResponse, Resource, Subject
 
 
 class BaseDeniedClient:
@@ -50,24 +50,32 @@ class BaseDeniedClient:
 
     def _build_check_request(
         self,
-        principal_uri: str | None,
-        resource_uri: str | None,
-        principal_attributes: dict[str, Any] | None,
-        resource_attributes: dict[str, Any] | None,
-        action: str,
+        subject_type: str,
+        subject_id: str,
+        resource_type: str,
+        resource_id: str,
+        subject_properties: dict[str, Any] | None,
+        resource_properties: dict[str, Any] | None,
+        action: str | Action,
+        context: dict[str, Any] | None,
     ) -> CheckRequest:
-        """Build a CheckRequest from parameters."""
-        if principal_attributes is None:
-            principal_attributes = {}
-        if resource_attributes is None:
-            resource_attributes = {}
+        """Build a CheckRequest from parameters following Authzen specification."""
+        if subject_properties is None:
+            subject_properties = {}
+        if resource_properties is None:
+            resource_properties = {}
+
+        action_obj = action if isinstance(action, Action) else Action(name=action)
 
         return CheckRequest(
-            principal=PrincipalCheck(
-                uri=principal_uri, attributes=principal_attributes
+            subject=Subject(
+                type=subject_type, id=subject_id, properties=subject_properties
             ),
-            resource=ResourceCheck(uri=resource_uri, attributes=resource_attributes),
-            action=action,
+            resource=Resource(
+                type=resource_type, id=resource_id, properties=resource_properties
+            ),
+            action=action_obj,
+            context=context,
         )
 
     @staticmethod
@@ -100,7 +108,7 @@ class DeniedClient(BaseDeniedClient):
     """
     A synchronous client for interacting with the Denied authorization server.
 
-    This client provides methods to check permissions for principals
+    This client provides methods to check permissions for subjects
     performing actions on resources.
 
     The client should be used as a context manager to ensure proper cleanup
@@ -161,32 +169,42 @@ class DeniedClient(BaseDeniedClient):
 
     def check(
         self,
-        principal_uri: str | None = None,
-        resource_uri: str | None = None,
-        principal_attributes: dict | None = None,
-        resource_attributes: dict | None = None,
-        action: str = "access",
+        subject_type: str,
+        subject_id: str,
+        resource_type: str,
+        resource_id: str,
+        subject_properties: dict | None = None,
+        resource_properties: dict | None = None,
+        action: str | Action = "access",
+        context: dict | None = None,
     ) -> CheckResponse:
         """
-        Check whether a principal has permissions to perform an action on a resource.
+        Check whether a subject has permissions to perform an action on a resource.
 
         Parameters
         ----------
-        principal_uri : str, optional
-            The identifier of the principal. Can be provided for registered principals.
-        resource_uri : str, optional
-            The identifier of the resource. Can be provided for registered resources.
-        principal_attributes : dict, optional
-            The attributes of the principal. Should be provided if the principal is not registered.
-        resource_attributes : dict, optional
-            The attributes of the resource. Should be provided if the resource is not registered.
-        action : str, optional
-            The action to check permissions for. Defaults to "access".
+        subject_type : str
+            The type of the subject (e.g., "user", "service").
+        subject_id : str
+            The unique identifier of the subject scoped to the type.
+        resource_type : str
+            The type of the resource (e.g., "document", "api").
+        resource_id : str
+            The unique identifier of the resource scoped to the type.
+        subject_properties : dict, optional
+            Additional properties of the subject.
+        resource_properties : dict, optional
+            Additional properties of the resource.
+        action : str or Action, optional
+            The action to check permissions for. Can be a string (e.g., "read")
+            or an Action object. Defaults to "access".
+        context : dict, optional
+            Additional context for the authorization check.
 
         Returns
         -------
         CheckResponse
-            The response containing the allowed flag and the reason for the decision.
+            The response containing the decision and optional context.
 
         Raises
         ------
@@ -194,11 +212,14 @@ class DeniedClient(BaseDeniedClient):
             If the HTTP request returns an unsuccessful status code.
         """
         request = self._build_check_request(
-            principal_uri,
-            resource_uri,
-            principal_attributes,
-            resource_attributes,
+            subject_type,
+            subject_id,
+            resource_type,
+            resource_id,
+            subject_properties,
+            resource_properties,
             action,
+            context,
         )
         response = self.client.post("/pdp/check", json=request.model_dump())
         self._handle_response(response)
@@ -235,7 +256,7 @@ class AsyncDeniedClient(BaseDeniedClient):
     """
     An asynchronous client for interacting with the Denied authorization server.
 
-    This client provides async methods to check permissions for principals
+    This client provides async methods to check permissions for subjects
     performing actions on resources.
 
     The client should be used as an async context manager to ensure proper cleanup
@@ -296,32 +317,42 @@ class AsyncDeniedClient(BaseDeniedClient):
 
     async def check(
         self,
-        principal_uri: str | None = None,
-        resource_uri: str | None = None,
-        principal_attributes: dict | None = None,
-        resource_attributes: dict | None = None,
-        action: str = "access",
+        subject_type: str,
+        subject_id: str,
+        resource_type: str,
+        resource_id: str,
+        subject_properties: dict | None = None,
+        resource_properties: dict | None = None,
+        action: str | Action = "access",
+        context: dict | None = None,
     ) -> CheckResponse:
         """
-        Asynchronously check whether a principal has permissions.
+        Asynchronously check whether a subject has permissions.
 
         Parameters
         ----------
-        principal_uri : str, optional
-            The identifier of the principal. Can be provided for registered principals.
-        resource_uri : str, optional
-            The identifier of the resource. Can be provided for registered resources.
-        principal_attributes : dict, optional
-            The attributes of the principal. Should be provided if the principal is not registered.
-        resource_attributes : dict, optional
-            The attributes of the resource. Should be provided if the resource is not registered.
-        action : str, optional
-            The action to check permissions for. Defaults to "access".
+        subject_type : str
+            The type of the subject (e.g., "user", "service").
+        subject_id : str
+            The unique identifier of the subject scoped to the type.
+        resource_type : str
+            The type of the resource (e.g., "document", "api").
+        resource_id : str
+            The unique identifier of the resource scoped to the type.
+        subject_properties : dict, optional
+            Additional properties of the subject.
+        resource_properties : dict, optional
+            Additional properties of the resource.
+        action : str or Action, optional
+            The action to check permissions for. Can be a string (e.g., "read")
+            or an Action object. Defaults to "access".
+        context : dict, optional
+            Additional context for the authorization check.
 
         Returns
         -------
         CheckResponse
-            The response containing the allowed flag and the reason for the decision.
+            The response containing the decision and optional context.
 
         Raises
         ------
@@ -329,11 +360,14 @@ class AsyncDeniedClient(BaseDeniedClient):
             If the HTTP request returns an unsuccessful status code.
         """
         request = self._build_check_request(
-            principal_uri,
-            resource_uri,
-            principal_attributes,
-            resource_attributes,
+            subject_type,
+            subject_id,
+            resource_type,
+            resource_id,
+            subject_properties,
+            resource_properties,
             action,
+            context,
         )
         response = await self.client.post("/pdp/check", json=request.model_dump())
         self._handle_response(response)

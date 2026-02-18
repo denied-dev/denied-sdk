@@ -3,13 +3,14 @@ import pytest
 from pydantic import ValidationError
 
 from denied_sdk import (
+    Action,
     CheckRequest,
     CheckResponse,
+    CheckResponseContext,
     DeniedClient,
-    PrincipalCheck,
-    ResourceCheck,
+    Resource,
+    Subject,
 )
-from denied_sdk.enums.entity import EntityType
 
 # MARK: - Basic Initialization Tests
 
@@ -39,105 +40,115 @@ def test_client_context_manager():
 # MARK: - Schema Creation Tests
 
 
-def test_principal_check_creation():
-    """Test creating a PrincipalCheck with URI."""
-    principal = PrincipalCheck(uri="user:alice", attributes={})
-    assert principal.uri == "user:alice"
-    assert principal.type == EntityType.principal
+def test_subject_creation():
+    """Test creating a Subject."""
+    subject = Subject(type="user", id="alice", properties={"role": "admin"})
+    assert subject.type == "user"
+    assert subject.id == "alice"
+    assert subject.properties == {"role": "admin"}
 
 
-def test_resource_check_creation():
-    """Test creating a ResourceCheck with URI."""
-    resource = ResourceCheck(uri="document:secret", attributes={})
-    assert resource.uri == "document:secret"
-    assert resource.type == EntityType.resource
+def test_resource_creation():
+    """Test creating a Resource."""
+    resource = Resource(type="document", id="secret", properties={"owner": "alice"})
+    assert resource.type == "document"
+    assert resource.id == "secret"
+    assert resource.properties == {"owner": "alice"}
+
+
+def test_action_creation():
+    """Test creating an Action."""
+    action = Action(name="read", properties={"scope": "full"})
+    assert action.name == "read"
+    assert action.properties == {"scope": "full"}
 
 
 def test_check_request_creation():
     """Test creating a CheckRequest."""
     request = CheckRequest(
-        principal=PrincipalCheck(uri="user:alice", attributes={}),
-        resource=ResourceCheck(uri="document:1", attributes={}),
-        action="read",
+        subject=Subject(type="user", id="alice", properties={}),
+        resource=Resource(type="document", id="1", properties={}),
+        action=Action(name="read"),
     )
-    assert request.principal.uri == "user:alice"
-    assert request.resource.uri == "document:1"
-    assert request.action == "read"
+    assert request.subject.id == "alice"
+    assert request.resource.id == "1"
+    assert request.action.name == "read"
 
 
 def test_check_response_creation():
     """Test creating a CheckResponse."""
-    response = CheckResponse(allowed=True, reason="Test reason")
-    assert response.allowed is True
-    assert response.reason == "Test reason"
+    response = CheckResponse(
+        decision=True, context=CheckResponseContext(reason="Test reason")
+    )
+    assert response.decision is True
+    assert response.context.reason == "Test reason"
 
 
 # MARK: - Validation Tests
 
 
-def test_entity_check_requires_uri_or_attributes():
-    """Test that EntityCheck validation fails with neither uri nor attributes."""
-    with pytest.raises(ValidationError, match="Either 'uri' or non-empty 'attributes'"):
-        PrincipalCheck(uri=None, attributes={})
+def test_subject_requires_type_and_id():
+    """Test that Subject requires both type and id."""
+    with pytest.raises(ValidationError):
+        Subject(type="user")
+    with pytest.raises(ValidationError):
+        Subject(id="alice")
 
 
-def test_entity_check_empty_attributes_requires_uri():
-    """Test that empty attributes dict requires URI."""
-    with pytest.raises(ValidationError, match="Either 'uri' or non-empty 'attributes'"):
-        PrincipalCheck(uri=None, attributes={})
+def test_resource_requires_type_and_id():
+    """Test that Resource requires both type and id."""
+    with pytest.raises(ValidationError):
+        Resource(type="document")
+    with pytest.raises(ValidationError):
+        Resource(id="123")
 
 
-def test_entity_check_accepts_uri_only():
-    """Test that URI alone is valid."""
-    principal = PrincipalCheck(uri="user:alice", attributes={})
-    assert principal.uri == "user:alice"
-
-
-def test_entity_check_accepts_attributes_only():
-    """Test that attributes alone are valid."""
-    principal = PrincipalCheck(uri=None, attributes={"role": "admin"})
-    assert principal.attributes == {"role": "admin"}
-
-
-def test_entity_check_accepts_both_uri_and_attributes():
-    """Test that both URI and attributes can be provided."""
-    principal = PrincipalCheck(uri="user:alice", attributes={"role": "admin"})
-    assert principal.uri == "user:alice"
-    assert principal.attributes == {"role": "admin"}
+def test_action_requires_name():
+    """Test that Action requires name."""
+    with pytest.raises(ValidationError):
+        Action()
 
 
 # MARK: - API Method Tests (Mocked)
 
 
-def test_check_with_uri_success(httpx_mock):
-    """Test successful check with URIs."""
+def test_check_success(httpx_mock):
+    """Test successful check."""
     httpx_mock.add_response(
         method="POST",
         url="https://api.denied.dev/pdp/check",
-        json={"allowed": True, "reason": "Policy allows"},
+        json={"decision": True, "context": {"reason": "Policy allows"}},
     )
     with DeniedClient() as client:
         response = client.check(
-            principal_uri="user:alice", resource_uri="doc:1", action="read"
-        )
-        assert response.allowed is True
-        assert response.reason == "Policy allows"
-
-
-def test_check_with_attributes_success(httpx_mock):
-    """Test successful check with attributes."""
-    httpx_mock.add_response(
-        method="POST",
-        url="https://api.denied.dev/pdp/check",
-        json={"allowed": False},
-    )
-    with DeniedClient() as client:
-        response = client.check(
-            principal_attributes={"role": "guest"},
-            resource_attributes={"sensitivity": "high"},
+            subject_type="user",
+            subject_id="alice",
+            resource_type="document",
+            resource_id="1",
             action="read",
         )
-        assert response.allowed is False
+        assert response.decision is True
+        assert response.context.reason == "Policy allows"
+
+
+def test_check_with_properties_success(httpx_mock):
+    """Test successful check with properties."""
+    httpx_mock.add_response(
+        method="POST",
+        url="https://api.denied.dev/pdp/check",
+        json={"decision": False},
+    )
+    with DeniedClient() as client:
+        response = client.check(
+            subject_type="user",
+            subject_id="guest",
+            subject_properties={"role": "guest"},
+            resource_type="document",
+            resource_id="secret",
+            resource_properties={"sensitivity": "high"},
+            action="read",
+        )
+        assert response.decision is False
 
 
 def test_check_default_action(httpx_mock):
@@ -145,11 +156,16 @@ def test_check_default_action(httpx_mock):
     httpx_mock.add_response(
         method="POST",
         url="https://api.denied.dev/pdp/check",
-        json={"allowed": True},
+        json={"decision": True},
     )
     with DeniedClient() as client:
-        response = client.check(principal_uri="user:alice", resource_uri="doc:1")
-        assert response.allowed is True
+        response = client.check(
+            subject_type="user",
+            subject_id="alice",
+            resource_type="document",
+            resource_id="1",
+        )
+        assert response.decision is True
         # Verify the request was made with action="access"
         request = httpx_mock.get_request()
         assert request is not None
@@ -160,26 +176,29 @@ def test_bulk_check_success(httpx_mock):
     httpx_mock.add_response(
         method="POST",
         url="https://api.denied.dev/pdp/check/bulk",
-        json=[{"allowed": True}, {"allowed": False, "reason": "Denied"}],
+        json=[
+            {"decision": True},
+            {"decision": False, "context": {"reason": "Denied"}},
+        ],
     )
     requests = [
         CheckRequest(
-            principal=PrincipalCheck(uri="user:alice", attributes={}),
-            resource=ResourceCheck(uri="doc:1", attributes={}),
-            action="read",
+            subject=Subject(type="user", id="alice", properties={}),
+            resource=Resource(type="document", id="1", properties={}),
+            action=Action(name="read"),
         ),
         CheckRequest(
-            principal=PrincipalCheck(uri="user:bob", attributes={}),
-            resource=ResourceCheck(uri="doc:2", attributes={}),
-            action="write",
+            subject=Subject(type="user", id="bob", properties={}),
+            resource=Resource(type="document", id="2", properties={}),
+            action=Action(name="write"),
         ),
     ]
     with DeniedClient() as client:
         responses = client.bulk_check(requests)
         assert len(responses) == 2
-        assert responses[0].allowed is True
-        assert responses[1].allowed is False
-        assert responses[1].reason == "Denied"
+        assert responses[0].decision is True
+        assert responses[1].decision is False
+        assert responses[1].context.reason == "Denied"
 
 
 # MARK: - Error Handling Tests
@@ -194,7 +213,12 @@ def test_check_http_404_error(httpx_mock):
         text="Not found",
     )
     with DeniedClient() as client, pytest.raises(httpx.HTTPStatusError, match="404"):
-        client.check(principal_uri="user:alice", resource_uri="doc:1")
+        client.check(
+            subject_type="user",
+            subject_id="alice",
+            resource_type="document",
+            resource_id="1",
+        )
 
 
 def test_check_http_500_error(httpx_mock):
@@ -206,14 +230,24 @@ def test_check_http_500_error(httpx_mock):
         json={"error": "Internal server error"},
     )
     with DeniedClient() as client, pytest.raises(httpx.HTTPStatusError, match="500"):
-        client.check(principal_uri="user:alice", resource_uri="doc:1")
+        client.check(
+            subject_type="user",
+            subject_id="alice",
+            resource_type="document",
+            resource_id="1",
+        )
 
 
 def test_check_network_timeout(httpx_mock):
     """Test handling of network timeout."""
     httpx_mock.add_exception(httpx.TimeoutException("Request timeout"))
     with DeniedClient() as client, pytest.raises(httpx.TimeoutException):
-        client.check(principal_uri="user:alice", resource_uri="doc:1")
+        client.check(
+            subject_type="user",
+            subject_id="alice",
+            resource_type="document",
+            resource_id="1",
+        )
 
 
 def test_bulk_check_http_error(httpx_mock):
@@ -226,9 +260,9 @@ def test_bulk_check_http_error(httpx_mock):
     )
     requests = [
         CheckRequest(
-            principal=PrincipalCheck(uri="user:alice", attributes={}),
-            resource=ResourceCheck(uri="doc:1", attributes={}),
-            action="read",
+            subject=Subject(type="user", id="alice", properties={}),
+            resource=Resource(type="document", id="1", properties={}),
+            action=Action(name="read"),
         )
     ]
     with DeniedClient() as client, pytest.raises(httpx.HTTPStatusError, match="400"):

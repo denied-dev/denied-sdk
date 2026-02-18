@@ -6,7 +6,7 @@ test the same user reading projects with different resource scopes: user-scoped
 (allowed) vs admin-scoped (denied).
 
 Policy Rule (in Denied):
-- Allow: principal.role='user' AND resource.scope='user' AND action='read'
+- Allow: subject.properties.role='user' AND resource.properties.scope='user' AND action.name='read'
 
 Setup:
 1. Install: pip install denied-sdk[adk] (or: uv add denied-sdk[adk])
@@ -61,9 +61,7 @@ async def main():
         denied_url=os.getenv("DENIED_URL"),
         denied_api_key=os.getenv("DENIED_API_KEY"),
         fail_mode="closed",
-        # Extract role from session state into principal attributes
-        principal_state_keys=["role"],
-        # Extract scope from session state into resource attributes
+        subject_state_keys=["role"],
         resource_state_keys=["scope"],
     )
 

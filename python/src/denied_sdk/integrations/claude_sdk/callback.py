@@ -2,7 +2,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from denied_sdk import AsyncDeniedClient
+from denied_sdk import AsyncDeniedClient, CheckRequest
 from denied_sdk.schemas.check import CheckResponse
 
 from .config import AuthorizationConfig
@@ -24,8 +24,8 @@ def create_denied_permission_callback(
     *,
     user_id: str | None = None,
     session_id: str | None = None,
-    principal_attributes: dict[str, Any] | None = None,
-    resource_attributes: dict[str, Any] | None = None,
+    subject_properties: dict[str, Any] | None = None,
+    resource_properties: dict[str, Any] | None = None,
 ):
     """Factory function to create a Denied authorization permission callback.
 
@@ -38,11 +38,11 @@ def create_denied_permission_callback(
             with environment variables.
         denied_client: Optional pre-configured AsyncDeniedClient. If None,
             creates a new client from config.
-        user_id: User ID for principal identification. Overrides config.user_id.
-        session_id: Session ID for principal attributes. Overrides config.session_id.
-        principal_attributes: Custom attributes to include in the principal
+        user_id: User ID for subject identification. Overrides config.user_id.
+        session_id: Session ID for subject properties. Overrides config.session_id.
+        subject_properties: Custom properties to include in the subject
             (e.g., {"role": "admin"}). These are merged with user_id/session_id.
-        resource_attributes: Custom attributes to include in the resource
+        resource_properties: Custom properties to include in the resource
             (e.g., {"scope": "user"}). These are merged with tool_name/tool_input.
 
     Returns:
@@ -55,8 +55,8 @@ def create_denied_permission_callback(
         # Create the callback with user context, role, and resource scope
         permission_callback = create_denied_permission_callback(
             user_id="user-123",
-            principal_attributes={"role": "user"},
-            resource_attributes={"scope": "user"},
+            subject_properties={"role": "user"},
+            resource_properties={"scope": "user"},
         )
 
         # Use with Claude Agent SDK
@@ -87,9 +87,9 @@ def create_denied_permission_callback(
         AuthorizationConfig(**config_dict) if config_dict else AuthorizationConfig()
     )
 
-    # Store attributes for the mapper
-    effective_principal_attributes = principal_attributes or {}
-    effective_resource_attributes = resource_attributes or {}
+    # Store properties for the mapper
+    effective_subject_properties = subject_properties or {}
+    effective_resource_properties = resource_properties or {}
 
     # Create client if not provided
     client = denied_client or AsyncDeniedClient(
@@ -100,8 +100,8 @@ def create_denied_permission_callback(
 
     mapper = ContextMapper(
         effective_config,
-        effective_principal_attributes,
-        effective_resource_attributes,
+        effective_subject_properties,
+        effective_resource_properties,
     )
 
     logger.info(
@@ -136,9 +136,9 @@ def create_denied_permission_callback(
 
         logger.debug(
             f"Authorization check request: "
-            f"principal={check_request.principal.model_dump()}, "
+            f"subject={check_request.subject.model_dump()}, "
             f"resource={check_request.resource.model_dump()}, "
-            f"action={check_request.action}"
+            f"action={check_request.action.model_dump()}"
         )
 
         # Perform authorization check with retry
@@ -159,14 +159,14 @@ def create_denied_permission_callback(
             return PermissionResultAllow()
 
         # Handle authorization decision
-        if not check_result.allowed:
+        if not check_result.decision:
             logger.info(
                 f"Authorization DENIED for tool={tool_name}, "
                 f"user={effective_config.user_id}, "
-                f"reason={check_result.reason}"
+                f"reason={check_result.context.reason}"
             )
             return PermissionResultDeny(
-                message=check_result.reason or "Authorization denied"
+                message=check_result.context.reason or "Authorization denied"
             )
 
         logger.debug(
@@ -180,7 +180,7 @@ def create_denied_permission_callback(
 
 async def _check_with_retry(
     client: AsyncDeniedClient,
-    check_request,
+    check_request: CheckRequest,
     config: AuthorizationConfig,
 ) -> CheckResponse | None:
     """Perform authorization check with retry logic.
@@ -196,11 +196,14 @@ async def _check_with_retry(
     for attempt in range(config.retry_attempts + 1):
         try:
             return await client.check(
-                principal_uri=check_request.principal.uri,
-                principal_attributes=check_request.principal.attributes,
-                resource_uri=check_request.resource.uri,
-                resource_attributes=check_request.resource.attributes,
+                subject_type=check_request.subject.type,
+                subject_id=check_request.subject.id,
+                subject_properties=check_request.subject.properties,
+                resource_type=check_request.resource.type,
+                resource_id=check_request.resource.id,
+                resource_properties=check_request.resource.properties,
                 action=check_request.action,
+                context=check_request.context,
             )
 
         except Exception as e:

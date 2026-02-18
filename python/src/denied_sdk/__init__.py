@@ -1,22 +1,22 @@
 """Denied SDK for Python - Authorization client library."""
 
-from .client import AsyncDeniedClient, BaseDeniedClient, DeniedClient
-from .enums import EntityType
+from .client import AsyncDeniedClient, DeniedClient
 from .schemas import (
+    Action,
     CheckRequest,
     CheckResponse,
-    EntityCheck,
-    PrincipalCheck,
-    ResourceCheck,
+    CheckResponseContext,
+    Resource,
+    Subject,
 )
 
 __all__ = [
     "DeniedClient",
     "AsyncDeniedClient",
-    "EntityType",
     "CheckRequest",
     "CheckResponse",
-    "EntityCheck",
-    "PrincipalCheck",
-    "ResourceCheck",
+    "CheckResponseContext",
+    "Subject",
+    "Resource",
+    "Action",
 ]

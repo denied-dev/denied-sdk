@@ -20,7 +20,7 @@ from denied_sdk.integrations.claude_sdk import create_denied_permission_callback
 
 permission_callback = create_denied_permission_callback(
     user_id="alice",
-    principal_attributes={"role": "user"},
+    subject_properties={"role": "user"},
 )
 
 options = ClaudeAgentOptions(
@@ -54,7 +54,7 @@ User Request -> Claude -> can_use_tool callback
 
 The callback extracts context and sends to Denied:
 
-- **Principal**: `user_id`, `session_id`, `role` (from callback args)
+- **Subject**: `user_id`, `session_id`, `role` (from callback args)
 - **Resource**: `tool_name`, `tool_input` (from tool call)
 - **Action**: Inferred from tool name (`Read` -> read, `Write` -> create, etc.)
 
@@ -68,14 +68,14 @@ config = AuthorizationConfig(
     fail_mode="closed",     # or "open" - behavior when Denied is unavailable
     retry_attempts=2,
     timeout_seconds=5.0,
-    extract_tool_args=True, # include tool arguments in resource attributes
+    extract_tool_args=True, # include tool arguments in resource properties
 )
 
 permission_callback = create_denied_permission_callback(
     config=config,
     user_id="alice",
-    principal_attributes={"role": "user"},
-    resource_attributes={"scope": "user"},
+    subject_properties={"role": "user"},
+    resource_properties={"scope": "user"},
 )
 ```
 
@@ -86,24 +86,24 @@ Create this policy in your Denied dashboard:
 ```rego
 # Allow users to read user-scoped resources
 allow {
-    input.principal.attributes.role == "user"
-    input.resource.attributes.scope == "user"
-    input.action == "read"
+    input.subject.properties.role == "user"
+    input.resource.properties.scope == "user"
+    input.action.name == "read"
 }
 
 # Allow admins to do anything
 allow {
-    input.resource.attributes.scope == "admin"
+    input.resource.properties.scope == "admin"
 }
 ```
 
-Pass attributes when creating the callback:
+Pass properties when creating the callback:
 
 ```python
 permission_callback = create_denied_permission_callback(
     user_id="alice",
-    principal_attributes={"role": "user"},   # -> input.principal.attributes.role
-    resource_attributes={"scope": "user"},   # -> input.resource.attributes.scope
+    subject_properties={"role": "user"},   # -> input.subject.properties.role
+    resource_properties={"scope": "user"},   # -> input.resource.properties.scope
 )
 ```
 

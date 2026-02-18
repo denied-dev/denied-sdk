@@ -9,9 +9,9 @@ Rego Policy (create in Denied dashboard):
 ```rego
 # Allow users to read user-scoped resources
 allow {
-    input.principal.attributes.role == "user"
-    input.resource.attributes.scope == "user"
-    input.action == "read"
+    input.subject.properties.role == "user"
+    input.resource.properties.scope == "user"
+    input.action.name == "read"
 }
 ```
 
@@ -71,9 +71,7 @@ async def main():
             denied_url=os.getenv("DENIED_URL"),
             denied_api_key=os.getenv("DENIED_API_KEY"),
             fail_mode="closed",  # Deny on auth service failure
-            # Extract role from session state into principal attributes
-            principal_state_keys=["role"],
-            # Extract scope from session state into resource attributes
+            subject_state_keys=["role"],
             resource_state_keys=["scope"],
         )
 
