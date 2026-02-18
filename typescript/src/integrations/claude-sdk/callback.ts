@@ -64,13 +64,9 @@ async function checkWithRetry(
   for (let attempt = 0; attempt <= config.retryAttempts; attempt++) {
     try {
       return await client.check({
-        subjectType: checkRequest.subject.type,
-        subjectId: checkRequest.subject.id,
-        subjectProperties: checkRequest.subject.properties,
-        resourceType: checkRequest.resource.type,
-        resourceId: checkRequest.resource.id,
-        resourceProperties: checkRequest.resource.properties,
+        subject: checkRequest.subject,
         action: checkRequest.action,
+        resource: checkRequest.resource,
         context: checkRequest.context,
       });
     } catch (error) {

@@ -171,7 +171,7 @@ async def test_callback_user_id_override(config, mock_client, mock_context):
 
     # Verify the call was made with bob as the user
     call_args = mock_client.check.call_args
-    assert "bob" in call_args.kwargs["subject_id"]
+    assert "bob" in call_args.kwargs["subject"].id
 
 
 @pytest.mark.asyncio
@@ -191,7 +191,7 @@ async def test_callback_session_id_override(config, mock_client, mock_context):
 
     # Verify the call was made with new-session
     call_args = mock_client.check.call_args
-    assert call_args.kwargs["subject_properties"]["session_id"] == "new-session"
+    assert call_args.kwargs["subject"].properties["session_id"] == "new-session"
 
 
 @pytest.mark.asyncio
@@ -210,7 +210,7 @@ async def test_callback_subject_properties(config, mock_client, mock_context):
     await callback("Write", {}, mock_context)
 
     call_args = mock_client.check.call_args
-    subject_props = call_args.kwargs["subject_properties"]
+    subject_props = call_args.kwargs["subject"].properties
     assert subject_props["role"] == "admin"
     assert subject_props["department"] == "engineering"
     # user_id and session_id from config should also be present
@@ -239,7 +239,7 @@ async def test_callback_subject_properties_without_user_id(mock_client, mock_con
     await callback("Read", {}, mock_context)
 
     call_args = mock_client.check.call_args
-    subject_props = call_args.kwargs["subject_properties"]
+    subject_props = call_args.kwargs["subject"].properties
     assert subject_props["role"] == "viewer"
     # user_id not in config, so should not be present
     assert "user_id" not in subject_props
@@ -264,7 +264,7 @@ async def test_callback_with_tool_args(config, mock_client, mock_context):
     )
 
     call_args = mock_client.check.call_args
-    resource_props = call_args.kwargs["resource_properties"]
+    resource_props = call_args.kwargs["resource"].properties
     # tool_input should be wrapped in {"values": ...} structure
     assert resource_props["tool_input"]["values"]["file_path"] == "/home/alice/doc.txt"
     assert resource_props["tool_input"]["values"]["content"] == "hello"

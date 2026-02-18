@@ -1,6 +1,6 @@
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class SubjectOrResourceBase(BaseModel):
@@ -30,15 +30,55 @@ class Action(BaseModel):
     )
 
 
+SubjectLike = Subject | dict[str, Any] | str
+ResourceLike = Resource | dict[str, Any] | str
+ActionLike = Action | dict[str, Any] | str
+
+
 class CheckRequest(BaseModel):
     """Request to check authorization following Authzen specification."""
 
     subject: Subject = Field(..., description="The subject performing the action")
-    resource: Resource = Field(..., description="The resource being acted on")
     action: Action = Field(..., description="The action being performed")
+    resource: Resource = Field(..., description="The resource being acted on")
     context: dict[str, Any] | None = Field(
         default=None, description="Additional context for the authorization check"
     )
+
+    @field_validator("subject", mode="before")
+    @classmethod
+    def coerce_subject(cls, v: SubjectLike) -> Subject:
+        if isinstance(v, Subject):
+            return v
+        if isinstance(v, dict):
+            return Subject.model_validate(v)
+        if "://" not in v:
+            msg = f"Invalid subject string '{v}': expected format 'type://id'"
+            raise ValueError(msg)
+        entity_type, entity_id = v.split("://", 1)
+        return Subject(type=entity_type, id=entity_id)
+
+    @field_validator("resource", mode="before")
+    @classmethod
+    def coerce_resource(cls, v: ResourceLike) -> Resource:
+        if isinstance(v, Resource):
+            return v
+        if isinstance(v, dict):
+            return Resource.model_validate(v)
+        if "://" not in v:
+            msg = f"Invalid resource string '{v}': expected format 'type://id'"
+            raise ValueError(msg)
+        entity_type, entity_id = v.split("://", 1)
+        return Resource(type=entity_type, id=entity_id)
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def coerce_action(cls, v: ActionLike) -> Action:
+        if isinstance(v, Action):
+            return v
+        if isinstance(v, dict):
+            return Action.model_validate(v)
+        return Action(name=v)
 
 
 class CheckResponseContext(BaseModel):

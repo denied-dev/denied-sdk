@@ -62,17 +62,22 @@ describe("createDeniedPermissionCallback", () => {
       await callback("Write", { file_path: "/test.txt" }, mockOptions);
 
       expect(mockClient.check).toHaveBeenCalledWith({
-        subjectType: "user",
-        subjectId: "user-123",
-        subjectProperties: { user_id: "user-123", role: "admin" },
-        resourceType: "tool",
-        resourceId: "Write",
-        resourceProperties: {
-          tool_name: "Write",
-          scope: "project",
-          tool_input: { values: { file_path: "/test.txt" } },
+        subject: {
+          type: "user",
+          id: "user-123",
+          properties: { user_id: "user-123", role: "admin" },
         },
         action: { name: "create" },
+        resource: {
+          type: "tool",
+          id: "Write",
+          properties: {
+            tool_name: "Write",
+            scope: "project",
+            tool_input: { values: { file_path: "/test.txt" } },
+          },
+        },
+        context: undefined,
       });
     });
   });
@@ -206,11 +211,13 @@ describe("createDeniedPermissionCallback", () => {
 
       expect(mockClient.check).toHaveBeenCalledWith(
         expect.objectContaining({
-          subjectType: "user",
-          subjectId: "override-user",
-          subjectProperties: expect.objectContaining({
-            user_id: "override-user",
-            session_id: "override-session",
+          subject: expect.objectContaining({
+            type: "user",
+            id: "override-user",
+            properties: expect.objectContaining({
+              user_id: "override-user",
+              session_id: "override-session",
+            }),
           }),
         }),
       );

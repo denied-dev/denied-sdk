@@ -52,23 +52,39 @@ const client = new DeniedClient({
 
 ### Check Permissions
 
-Check if a subject has permission to perform an action on a resource:
+Check if a subject has permission to perform an action on a resource.
+
+The `subject` and `resource` fields accept either a typed object or a `"type://id"` string. The `action` field accepts either a typed object or a plain string.
 
 ```typescript
-async function checkPermission() {
-  const response = await client.check({
-    subjectType: "user",
-    subjectId: "admin",
-    subjectProperties: { role: "admin" },
-    resourceType: "document",
-    resourceId: "confidential-doc",
-    resourceProperties: { classification: "confidential" },
-    action: "read",
-  });
+// Style 1: URI string shorthand — simplest for quick scripts
+const response = await client.check({
+  subject: "user://alice",
+  action: "read",
+  resource: "document://secret",
+});
 
-  console.log(`Decision: ${response.decision}`);
-  console.log(`Reason: ${response.context?.reason || "No reason"}`);
-}
+// Style 2: Typed objects — full IDE support with properties
+const response = await client.check({
+  subject: { type: "user", id: "admin", properties: { role: "admin" } },
+  action: { name: "read" },
+  resource: {
+    type: "document",
+    id: "confidential-doc",
+    properties: { classification: "confidential" },
+  },
+});
+
+// With additional context
+const response = await client.check({
+  subject: "user://alice",
+  action: "read",
+  resource: "document://123",
+  context: { ip: "192.168.1.1" },
+});
+
+console.log(`Decision: ${response.decision}`);
+console.log(`Reason: ${response.context?.reason || "No reason"}`);
 ```
 
 ### Bulk Check
@@ -78,41 +94,31 @@ Perform multiple permission checks in a single request:
 ```typescript
 import { CheckRequest } from "denied-sdk";
 
-async function bulkCheckPermissions() {
-  const requests: CheckRequest[] = [
-    {
-      subject: {
-        type: "user",
-        id: "alice",
-        properties: { role: "editor" },
-      },
-      resource: {
-        type: "document",
-        id: "report",
-        properties: { classification: "public" },
-      },
-      action: { name: "read" },
+const requests: CheckRequest[] = [
+  {
+    subject: { type: "user", id: "alice", properties: { role: "editor" } },
+    action: { name: "read" },
+    resource: {
+      type: "document",
+      id: "report",
+      properties: { classification: "public" },
     },
-    {
-      subject: {
-        type: "user",
-        id: "bob",
-        properties: { role: "viewer" },
-      },
-      resource: {
-        type: "document",
-        id: "report",
-        properties: { classification: "confidential" },
-      },
-      action: { name: "write" },
+  },
+  {
+    subject: { type: "user", id: "bob", properties: { role: "viewer" } },
+    action: { name: "write" },
+    resource: {
+      type: "document",
+      id: "report",
+      properties: { classification: "confidential" },
     },
-  ];
+  },
+];
 
-  const responses = await client.bulkCheck(requests);
-  responses.forEach((response, index) => {
-    console.log(`Check ${index + 1}: Decision = ${response.decision}`);
-  });
-}
+const responses = await client.bulkCheck(requests);
+responses.forEach((response, index) => {
+  console.log(`Check ${index + 1}: Decision = ${response.decision}`);
+});
 ```
 
 ## API Reference
@@ -135,22 +141,24 @@ new DeniedClient(options?: DeniedClientOptions)
 ##### check()
 
 ```typescript
-check(options: CheckOptions): Promise<CheckResponse>
+check(options: {
+  subject: SubjectLike;
+  action: ActionLike;
+  resource: ResourceLike;
+  context?: Record<string, unknown>;
+}): Promise<CheckResponse>
 ```
 
 Check if a subject has permission to perform an action on a resource.
 
 **Parameters:**
 
-- `subjectType` (string): The type of the subject
-- `subjectId` (string): The unique identifier of the subject scoped to the type
-- `subjectProperties` (Record<string, unknown>, optional): Additional properties of the subject
-- `resourceType` (string): The type of the resource
-- `resourceId` (string): The unique identifier of the resource scoped to the type
-- `resourceProperties` (Record<string, unknown>, optional): Additional properties of the resource
-- `action` (string | Action, optional): The action to check (defaults to "access")
+- `subject` (Subject | string, **required**): The subject performing the action. Either a `Subject` object `{ type, id, properties? }` or a `"type://id"` string.
+- `action` (Action | string, **required**): The action to check. Either an `Action` object `{ name, properties? }` or a plain action name string.
+- `resource` (Resource | string, **required**): The resource being acted on. Either a `Resource` object `{ type, id, properties? }` or a `"type://id"` string.
+- `context` (Record<string, unknown>, optional): Additional context for the authorization check.
 
-**Returns:** Promise<CheckResponse>
+**Returns:** `Promise<CheckResponse>`
 
 - `decision` (boolean): Whether the action is allowed
 - `context` (CheckResponseContext, optional): Context for the decision
@@ -169,7 +177,7 @@ Perform multiple permission checks in a single request.
 
 - `requests` (CheckRequest[]): Array of check requests
 
-**Returns:** Promise<CheckResponse[]> - Array of check responses
+**Returns:** `Promise<CheckResponse[]>` - Array of check responses
 
 ## Types
 
@@ -178,9 +186,28 @@ Perform multiple permission checks in a single request.
 ```typescript
 interface CheckRequest {
   subject: Subject;
-  resource: Resource;
   action: Action;
+  resource: Resource;
   context?: Record<string, unknown>;
+}
+```
+
+#### Subject / Resource
+
+```typescript
+interface Subject | Resource {
+  type: string;
+  id: string;
+  properties?: Record<string, unknown>;
+}
+```
+
+#### Action
+
+```typescript
+interface Action {
+  name: string;
+  properties?: Record<string, unknown>;
 }
 ```
 
@@ -190,6 +217,15 @@ interface CheckRequest {
 interface CheckResponse {
   decision: boolean;
   context?: CheckResponseContext;
+}
+```
+
+#### CheckResponseContext
+
+```typescript
+interface CheckResponseContext {
+  reason?: string;
+  rules?: string[];
 }
 ```
 

@@ -26,12 +26,23 @@ export interface Action {
 }
 
 /**
+ * Accepted input types for subject/resource: typed object or "type://id" string
+ */
+export type SubjectLike = Subject | string;
+export type ResourceLike = Resource | string;
+
+/**
+ * Accepted input types for action: typed object or action name string
+ */
+export type ActionLike = Action | string;
+
+/**
  * Request to check authorization following Authzen specification
  */
 export interface CheckRequest {
   subject: Subject;
-  resource: Resource;
   action: Action;
+  resource: Resource;
   context?: Record<string, unknown>;
 }
 

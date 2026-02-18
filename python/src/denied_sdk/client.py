@@ -1,9 +1,8 @@
 import os
-from typing import Any
 
 import httpx
 
-from .schemas import Action, CheckRequest, CheckResponse, Resource, Subject
+from .schemas import ActionLike, CheckRequest, CheckResponse, ResourceLike, SubjectLike
 
 
 class BaseDeniedClient:
@@ -47,36 +46,6 @@ class BaseDeniedClient:
         if self._api_key is not None:
             headers["X-API-Key"] = self._api_key
         return headers
-
-    def _build_check_request(
-        self,
-        subject_type: str,
-        subject_id: str,
-        resource_type: str,
-        resource_id: str,
-        subject_properties: dict[str, Any] | None,
-        resource_properties: dict[str, Any] | None,
-        action: str | Action,
-        context: dict[str, Any] | None,
-    ) -> CheckRequest:
-        """Build a CheckRequest from parameters following Authzen specification."""
-        if subject_properties is None:
-            subject_properties = {}
-        if resource_properties is None:
-            resource_properties = {}
-
-        action_obj = action if isinstance(action, Action) else Action(name=action)
-
-        return CheckRequest(
-            subject=Subject(
-                type=subject_type, id=subject_id, properties=subject_properties
-            ),
-            resource=Resource(
-                type=resource_type, id=resource_id, properties=resource_properties
-            ),
-            action=action_obj,
-            context=context,
-        )
 
     @staticmethod
     def _handle_response(response: httpx.Response) -> None:
@@ -169,13 +138,9 @@ class DeniedClient(BaseDeniedClient):
 
     def check(
         self,
-        subject_type: str,
-        subject_id: str,
-        resource_type: str,
-        resource_id: str,
-        subject_properties: dict | None = None,
-        resource_properties: dict | None = None,
-        action: str | Action = "access",
+        subject: SubjectLike,
+        action: ActionLike,
+        resource: ResourceLike,
         context: dict | None = None,
     ) -> CheckResponse:
         """
@@ -183,21 +148,18 @@ class DeniedClient(BaseDeniedClient):
 
         Parameters
         ----------
-        subject_type : str
-            The type of the subject (e.g., "user", "service").
-        subject_id : str
-            The unique identifier of the subject scoped to the type.
-        resource_type : str
-            The type of the resource (e.g., "document", "api").
-        resource_id : str
-            The unique identifier of the resource scoped to the type.
-        subject_properties : dict, optional
-            Additional properties of the subject.
-        resource_properties : dict, optional
-            Additional properties of the resource.
-        action : str or Action, optional
-            The action to check permissions for. Can be a string (e.g., "read")
-            or an Action object. Defaults to "access".
+        subject : Subject, dict, or str
+            The subject performing the action. Can be a Subject object,
+            a dict with ``type`` and ``id`` keys and optional ``properties``,
+            or a ``"type://id"`` string.
+        action : Action, dict, or str, optional
+            The action to check permissions for. Can be an Action object,
+            a dict with a ``name`` key and optional ``properties``,
+            or a plain string action name.
+        resource : Resource, dict, or str
+            The resource being acted on. Can be a Resource object,
+            a dict with ``type`` and ``id`` keys and optional ``properties``,
+            or a ``"type://id"`` string.
         context : dict, optional
             Additional context for the authorization check.
 
@@ -210,16 +172,11 @@ class DeniedClient(BaseDeniedClient):
         ------
         httpx.HTTPStatusError
             If the HTTP request returns an unsuccessful status code.
+        ValueError
+            If a string subject or resource does not match the ``"type://id"`` format.
         """
-        request = self._build_check_request(
-            subject_type,
-            subject_id,
-            resource_type,
-            resource_id,
-            subject_properties,
-            resource_properties,
-            action,
-            context,
+        request = CheckRequest(
+            subject=subject, action=action, resource=resource, context=context
         )
         response = self.client.post("/pdp/check", json=request.model_dump())
         self._handle_response(response)
@@ -317,35 +274,28 @@ class AsyncDeniedClient(BaseDeniedClient):
 
     async def check(
         self,
-        subject_type: str,
-        subject_id: str,
-        resource_type: str,
-        resource_id: str,
-        subject_properties: dict | None = None,
-        resource_properties: dict | None = None,
-        action: str | Action = "access",
+        subject: SubjectLike,
+        action: ActionLike,
+        resource: ResourceLike,
         context: dict | None = None,
     ) -> CheckResponse:
         """
-        Asynchronously check whether a subject has permissions.
+        Asynchronously check whether a subject has permissions to perform an action on a resource.
 
         Parameters
         ----------
-        subject_type : str
-            The type of the subject (e.g., "user", "service").
-        subject_id : str
-            The unique identifier of the subject scoped to the type.
-        resource_type : str
-            The type of the resource (e.g., "document", "api").
-        resource_id : str
-            The unique identifier of the resource scoped to the type.
-        subject_properties : dict, optional
-            Additional properties of the subject.
-        resource_properties : dict, optional
-            Additional properties of the resource.
-        action : str or Action, optional
-            The action to check permissions for. Can be a string (e.g., "read")
-            or an Action object. Defaults to "access".
+        subject : Subject, dict, or str
+            The subject performing the action. Can be a Subject object,
+            a dict with ``type`` and ``id`` keys and optional ``properties``,
+            or a ``"type://id"`` string.
+        action : Action, dict, or str, optional
+            The action to check permissions for. Can be an Action object,
+            a dict with a ``name`` key and optional ``properties``,
+            or a plain string action name.
+        resource : Resource, dict, or str
+            The resource being acted on. Can be a Resource object,
+            a dict with ``type`` and ``id`` keys and optional ``properties``,
+            or a ``"type://id"`` string.
         context : dict, optional
             Additional context for the authorization check.
 
@@ -358,16 +308,11 @@ class AsyncDeniedClient(BaseDeniedClient):
         ------
         httpx.HTTPStatusError
             If the HTTP request returns an unsuccessful status code.
+        ValueError
+            If a string subject or resource does not match the ``"type://id"`` format.
         """
-        request = self._build_check_request(
-            subject_type,
-            subject_id,
-            resource_type,
-            resource_id,
-            subject_properties,
-            resource_properties,
-            action,
-            context,
+        request = CheckRequest(
+            subject=subject, action=action, resource=resource, context=context
         )
         response = await self.client.post("/pdp/check", json=request.model_dump())
         self._handle_response(response)

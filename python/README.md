@@ -19,16 +19,12 @@ pip install denied-sdk
 ```python
 from denied_sdk import DeniedClient
 
-# Initialize the client
 client = DeniedClient(api_key="your-api-key")
 
-# Check authorization
 result = client.check(
-    subject_type="user",
-    subject_id="alice",
-    resource_type="document",
-    resource_id="secret",
-    action="read"
+    subject="user://alice",
+    action="read",
+    resource="document://secret",
 )
 
 print(f"Decision: {result.decision}")
@@ -46,13 +42,9 @@ The SDK can be configured using constructor parameters or environment variables:
 # Using environment variables
 import os
 
-os.environ["DENIED_API_KEY"] = "your-api-key"
-
-client = DeniedClient()
-
-# To use a custom URL (e.g., self-hosted instance):
 os.environ["DENIED_URL"] = "https://example.denied.dev"
-client = DeniedClient()  # Will use custom URL
+os.environ["DENIED_API_KEY"] = "your-api-key"
+client = DeniedClient()
 
 # Or pass directly to constructor:
 client = DeniedClient(
@@ -69,36 +61,56 @@ Check whether a subject has permissions to perform an action on a resource.
 
 **Parameters:**
 
-- `subject_type` (str, optional): The type of the subject
-- `subject_id` (str, optional): The identifier of the subject
-- `resource_type` (str, optional): The type of the resource
-- `resource_id` (str, optional): The identifier of the resource
-- `subject_properties` (dict, optional): The properties of the subject
-- `resource_properties` (dict, optional): The properties of the resource
-- `action` (str, optional): The action to check (default: "access")
+- `subject` (Subject | dict | str, **required**): The subject performing the action.
+  - `Subject` object: `Subject(type="user", id="alice", properties={"role": "admin"})`
+  - dict: `{"type": "user", "id": "alice", "properties": {"role": "admin"}}`
+  - URI string: `"user://alice"` (parsed as `type://id`)
+- `action` (Action | dict | str, **required**): The action to check.
+  - `Action` object: `Action(name="read", properties={"scope": "full"})`
+  - dict: `{"name": "read", "properties": {"scope": "full"}}`
+  - string: `"read"`
+- `resource` (Resource | dict | str, **required**): The resource being acted on.
+  - `Resource` object: `Resource(type="document", id="123", properties={"visibility": "public"})`
+  - dict: `{"type": "document", "id": "123"}`
+  - URI string: `"document://123"` (parsed as `type://id`)
+- `context` (dict, optional): Additional context for the authorization check.
 
 **Returns:** `CheckResponse` with `decision` (bool) and `context` (`CheckResponseContext`)
 
 **Examples:**
 
 ```python
-# Check with type and id
+from denied_sdk import Action, DeniedClient, Resource, Subject
+
+client = DeniedClient(api_key="your-api-key")
+
+# Style 1: URI string shorthand — simplest for quick scripts
 result = client.check(
-    subject_type="user",
-    subject_id="alice",
-    resource_type="document",
-    resource_id="123",
-    action="read"
+    subject="user://alice",
+    action="read",
+    resource="document://123",
 )
 
-# Check with properties
+# Style 2: Dicts — convenient for JSON-derived or dynamic data
 result = client.check(
-    subject_type="user",
-    subject_id="bob",
-    resource_type="document",
-    resource_id="123",
-    resource_properties={"visibility": "public"},
-    action="access"
+    subject={"type": "user", "id": "alice", "properties": {"role": "admin"}},
+    action={"name": "read"},
+    resource={"type": "document", "id": "123", "properties": {"classification": "secret"}},
+)
+
+# Style 3: Typed objects — full IDE support and Pydantic validation
+result = client.check(
+    subject=Subject(type="user", id="alice", properties={"role": "admin"}),
+    action=Action(name="read"),
+    resource=Resource(type="document", id="123", properties={"classification": "secret"}),
+)
+
+# With additional context
+result = client.check(
+    subject="user://alice",
+    action="read",
+    resource="document://123",
+    context={"ip": "192.168.1.1"},
 )
 ```
 
@@ -115,18 +127,20 @@ Perform multiple permission checks in a single request.
 **Example:**
 
 ```python
-from denied_sdk import Action, CheckRequest, Subject, Resource
+from denied_sdk import Action, CheckRequest, DeniedClient, Resource, Subject
+
+client = DeniedClient(api_key="your-api-key")
 
 requests = [
     CheckRequest(
-        subject=Subject(type="user", id="alice", properties={}),
-        resource=Resource(type="document", id="1", properties={}),
-        action=Action(name="read")
+        subject=Subject(type="user", id="alice"),
+        action=Action(name="read"),
+        resource=Resource(type="document", id="1"),
     ),
     CheckRequest(
         subject=Subject(type="user", id="bob", properties={"role": "viewer"}),
+        action=Action(name="access"),
         resource=Resource(type="document", id="1", properties={"visibility": "public"}),
-        action=Action(name="access")
     ),
 ]
 
@@ -135,23 +149,65 @@ for result in results:
     print(f"Decision: {result.decision}")
 ```
 
+## Types
+
 ### CheckRequest
 
-Authorization check request with:
+```python
+CheckRequest(
+    subject=Subject(...),   # or dict or "type://id" string
+    action=Action(...),     # or dict or string
+    resource=Resource(...), # or dict or "type://id" string
+    context={"ip": "..."},  # optional
+)
+```
 
-- `subject`: Subject
-- `resource`: Resource
-- `action`: Action
-- `context`: dict | None
+The `subject`, `action`, and `resource` fields accept the same flexible union types as the `check()` method.
+
+#### Subject / Resource
+
+```python
+Subject(type="user", id="alice", properties={"role": "admin"})
+Resource(type="document", id="123", properties={"visibility": "public"})
+```
+
+Both accept the same fields:
+
+- `type` (str, required): Entity type
+- `id` (str, required): Unique identifier scoped to the type
+- `properties` (dict, optional): Additional properties
+
+#### Action
+
+```python
+Action(name="read", properties={"scope": "full"})
+```
+
+- `name` (str, required): Action name
+- `properties` (dict, optional): Additional properties
 
 ### CheckResponse
 
-Authorization check response with:
+- `decision` (bool): Whether the action is allowed
+- `context` (`CheckResponseContext`, optional):
+  - `reason` (str | None): Reason for the decision
+  - `rules` (list[str] | None): Rules that triggered the decision
 
-- `decision`: bool
-- `context`: `CheckResponseContext`:
-  - `reason`: str | None
-  - `rules`: list[str] | None
+## Async Client
+
+An async client is also available:
+
+```python
+from denied_sdk import AsyncDeniedClient
+
+async with AsyncDeniedClient(api_key="your-api-key") as client:
+    result = await client.check(
+        subject="user://alice",
+        action="read",
+        resource="document://secret",
+    )
+    print(f"Decision: {result.decision}")
+```
 
 ## Requirements
 

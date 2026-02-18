@@ -30,7 +30,7 @@ import os
 
 import pytest
 
-from denied_sdk import DeniedClient
+from denied_sdk import DeniedClient, Resource, Subject
 
 
 @pytest.fixture
@@ -57,12 +57,10 @@ def client():
 def test_alice_user_read_user_scope(client):
     """Test alice (role=user) reading user-scoped resource."""
     response = client.check(
-        subject_type="user",
-        subject_id="alice",
-        subject_properties={"role": "user"},
-        resource_type="tool",
-        resource_id="github_get_issues",
-        resource_properties={"scope": "user"},
+        subject=Subject(type="user", id="alice", properties={"role": "user"}),
+        resource=Resource(
+            type="tool", id="github_get_issues", properties={"scope": "user"}
+        ),
         action="read",
     )
 
@@ -74,12 +72,10 @@ def test_alice_user_read_user_scope(client):
 def test_dude_user_read_user_scope(client):
     """Test dude (role=user) reading user-scoped resource - dude doesn't exist in DB."""
     response = client.check(
-        subject_type="user",
-        subject_id="dude",
-        subject_properties={"role": "user"},
-        resource_type="tool",
-        resource_id="github_get_issues",
-        resource_properties={"scope": "user"},
+        subject=Subject(type="user", id="dude", properties={"role": "user"}),
+        resource=Resource(
+            type="tool", id="github_get_issues", properties={"scope": "user"}
+        ),
         action="read",
     )
 

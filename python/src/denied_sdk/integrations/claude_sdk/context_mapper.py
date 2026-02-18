@@ -118,6 +118,6 @@ class ContextMapper:
 
         return CheckRequest(
             subject=subject,
-            resource=resource,
             action=action,
+            resource=resource,
         )

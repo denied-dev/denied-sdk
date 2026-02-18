@@ -109,11 +109,11 @@ def test_action_requires_name():
         Action()
 
 
-# MARK: - API Method Tests (Mocked)
+# MARK: - API Method Tests: Typed Objects
 
 
-def test_check_success(httpx_mock):
-    """Test successful check."""
+def test_check_with_objects(httpx_mock):
+    """Test check with typed Subject, Resource, Action objects."""
     httpx_mock.add_response(
         method="POST",
         url="https://api.denied.dev/pdp/check",
@@ -121,38 +121,16 @@ def test_check_success(httpx_mock):
     )
     with DeniedClient() as client:
         response = client.check(
-            subject_type="user",
-            subject_id="alice",
-            resource_type="document",
-            resource_id="1",
-            action="read",
+            subject=Subject(type="user", id="alice", properties={"role": "admin"}),
+            resource=Resource(type="document", id="1"),
+            action=Action(name="read"),
         )
         assert response.decision is True
         assert response.context.reason == "Policy allows"
 
 
-def test_check_with_properties_success(httpx_mock):
-    """Test successful check with properties."""
-    httpx_mock.add_response(
-        method="POST",
-        url="https://api.denied.dev/pdp/check",
-        json={"decision": False},
-    )
-    with DeniedClient() as client:
-        response = client.check(
-            subject_type="user",
-            subject_id="guest",
-            subject_properties={"role": "guest"},
-            resource_type="document",
-            resource_id="secret",
-            resource_properties={"sensitivity": "high"},
-            action="read",
-        )
-        assert response.decision is False
-
-
-def test_check_default_action(httpx_mock):
-    """Test that default action is 'access'."""
+def test_check_with_action_object(httpx_mock):
+    """Test check with Action object including properties."""
     httpx_mock.add_response(
         method="POST",
         url="https://api.denied.dev/pdp/check",
@@ -160,15 +138,143 @@ def test_check_default_action(httpx_mock):
     )
     with DeniedClient() as client:
         response = client.check(
-            subject_type="user",
-            subject_id="alice",
-            resource_type="document",
-            resource_id="1",
+            subject=Subject(type="user", id="alice"),
+            resource=Resource(type="document", id="1"),
+            action=Action(name="read", properties={"times": "3"}),
         )
         assert response.decision is True
-        # Verify the request was made with action="access"
-        request = httpx_mock.get_request()
-        assert request is not None
+
+
+# MARK: - API Method Tests: Dicts
+
+
+def test_check_with_dicts(httpx_mock):
+    """Test check with dict inputs for subject, resource, and action."""
+    httpx_mock.add_response(
+        method="POST",
+        url="https://api.denied.dev/pdp/check",
+        json={"decision": False},
+    )
+    with DeniedClient() as client:
+        response = client.check(
+            subject={"type": "user", "id": "bob", "properties": {"role": "guest"}},
+            resource={
+                "type": "document",
+                "id": "2",
+                "properties": {"visibility": "secret"},
+            },
+            action={"name": "write"},
+        )
+        assert response.decision is False
+
+
+def test_check_with_dict_action_string_entities(httpx_mock):
+    """Test check combining string entities with dict action."""
+    httpx_mock.add_response(
+        method="POST",
+        url="https://api.denied.dev/pdp/check",
+        json={"decision": True},
+    )
+    with DeniedClient() as client:
+        response = client.check(
+            subject="user://alice",
+            resource="document://1",
+            action={"name": "read", "properties": {"scope": "full"}},
+        )
+        assert response.decision is True
+
+
+# MARK: - API Method Tests: URI Strings
+
+
+def test_check_with_uri_strings(httpx_mock):
+    """Test check using 'type://id' string format."""
+    httpx_mock.add_response(
+        method="POST",
+        url="https://api.denied.dev/pdp/check",
+        json={"decision": True, "context": {"reason": "Policy allows"}},
+    )
+    with DeniedClient() as client:
+        response = client.check(
+            subject="user://alice",
+            resource="document://1",
+            action="read",
+        )
+        assert response.decision is True
+        assert response.context.reason == "Policy allows"
+
+
+def test_check_uri_string_with_id_containing_slashes(httpx_mock):
+    """Test that URI string with id containing slashes parses correctly."""
+    httpx_mock.add_response(
+        method="POST",
+        url="https://api.denied.dev/pdp/check",
+        json={"decision": True},
+    )
+    with DeniedClient() as client:
+        response = client.check(
+            subject="user://org/team/alice",
+            resource="document://bucket/folder/file",
+            action="read",
+        )
+        assert response.decision is True
+
+    import json
+
+    body = json.loads(httpx_mock.get_request().content)
+    assert body["subject"]["type"] == "user"
+    assert body["subject"]["id"] == "org/team/alice"
+    assert body["resource"]["type"] == "document"
+    assert body["resource"]["id"] == "bucket/folder/file"
+
+
+def test_check_invalid_uri_string_raises():
+    """Test that an invalid URI string raises ValueError."""
+    with DeniedClient() as client, pytest.raises(ValueError, match="type://id"):
+        client.check(subject="user:alice", action="read", resource="document://1")
+
+
+# MARK: - API Method Tests: Mixed inputs
+
+
+def test_check_success(httpx_mock):
+    """Test successful check with string action and object subject/resource."""
+    httpx_mock.add_response(
+        method="POST",
+        url="https://api.denied.dev/pdp/check",
+        json={"decision": True, "context": {"reason": "Policy allows"}},
+    )
+    with DeniedClient() as client:
+        response = client.check(
+            subject=Subject(type="user", id="alice"),
+            resource=Resource(type="document", id="1"),
+            action="read",
+        )
+        assert response.decision is True
+        assert response.context.reason == "Policy allows"
+
+
+def test_check_positional_args(httpx_mock):
+    """Test check with all three positional args (subject, action, resource)."""
+    httpx_mock.add_response(
+        method="POST",
+        url="https://api.denied.dev/pdp/check",
+        json={"decision": True},
+    )
+    with DeniedClient() as client:
+        response = client.check(
+            Subject(type="user", id="alice"),
+            "access",
+            Resource(type="document", id="1"),
+        )
+        assert response.decision is True
+
+    import json
+
+    body = json.loads(httpx_mock.get_request().content)
+    assert body["subject"]["type"] == "user"
+    assert body["action"]["name"] == "access"
+    assert body["resource"]["type"] == "document"
 
 
 def test_bulk_check_success(httpx_mock):
@@ -213,12 +319,7 @@ def test_check_http_404_error(httpx_mock):
         text="Not found",
     )
     with DeniedClient() as client, pytest.raises(httpx.HTTPStatusError, match="404"):
-        client.check(
-            subject_type="user",
-            subject_id="alice",
-            resource_type="document",
-            resource_id="1",
-        )
+        client.check(subject="user://alice", action="read", resource="document://1")
 
 
 def test_check_http_500_error(httpx_mock):
@@ -230,24 +331,14 @@ def test_check_http_500_error(httpx_mock):
         json={"error": "Internal server error"},
     )
     with DeniedClient() as client, pytest.raises(httpx.HTTPStatusError, match="500"):
-        client.check(
-            subject_type="user",
-            subject_id="alice",
-            resource_type="document",
-            resource_id="1",
-        )
+        client.check(subject="user://alice", action="read", resource="document://1")
 
 
 def test_check_network_timeout(httpx_mock):
     """Test handling of network timeout."""
     httpx_mock.add_exception(httpx.TimeoutException("Request timeout"))
     with DeniedClient() as client, pytest.raises(httpx.TimeoutException):
-        client.check(
-            subject_type="user",
-            subject_id="alice",
-            resource_type="document",
-            resource_id="1",
-        )
+        client.check(subject="user://alice", action="read", resource="document://1")
 
 
 def test_bulk_check_http_error(httpx_mock):

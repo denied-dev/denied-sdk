@@ -7,61 +7,58 @@ async function run(): Promise<void> {
   });
 
   try {
-    // Example 1: Simple check with properties
-    console.log("Example 1: Checking permissions with properties...");
+    // 1.1. Single check / Simple URI string shorthand
+    console.log("Example 1: URI string shorthand...");
     const response1 = await client.check({
-      subjectType: "user",
-      subjectId: "admin",
-      subjectProperties: { role: "admin" },
-      resourceType: "document",
-      resourceId: "confidential-doc",
-      resourceProperties: { classification: "confidential" },
+      subject: "user://alice",
       action: "read",
+      resource: "document://secret",
     });
     console.log(`Decision: ${response1.decision}`);
-    if (response1.context?.reason) {
-      console.log(`Reason: ${response1.context.reason}`);
-    }
 
-    // Example 2: Check with type and id
-    console.log("\nExample 2: Checking permissions with type and id...");
+    // 1.2. Single check / Typed objects
+    console.log("\nExample 2: Typed objects with properties...");
     const response2 = await client.check({
-      subjectType: "user",
-      subjectId: "john.doe",
-      resourceType: "document",
-      resourceId: "project-plan",
-      action: "write",
+      subject: { type: "user", id: "admin", properties: { role: "admin" } },
+      action: { name: "read" },
+      resource: {
+        type: "document",
+        id: "confidential-doc",
+        properties: { classification: "confidential" },
+      },
     });
     console.log(`Decision: ${response2.decision}`);
 
-    // Example 3: Bulk check
-    console.log("\nExample 3: Performing bulk check...");
+    // 1.3. Single check / Mixed strings and objects with optional context
+    console.log("\nExample 3: Mixed with context...");
+    const response3 = await client.check({
+      subject: "user://alice",
+      action: "execute",
+      resource: "api://payment-service",
+      context: { ip: "192.168.1.1", timestamp: Date.now() },
+    });
+    console.log(`Decision: ${response3.decision}`);
+
+    // 2. Multiple bulk checks
+    console.log("\nExample 4: Performing bulk check...");
     const requests: CheckRequest[] = [
       {
-        subject: {
-          type: "user",
-          id: "alice",
-          properties: { role: "editor" },
-        },
+        subject: { type: "user", id: "alice", properties: { role: "editor" } },
+        action: { name: "read" },
         resource: {
           type: "document",
           id: "report",
           properties: { classification: "public" },
         },
-        action: { name: "read" },
       },
       {
-        subject: {
-          type: "user",
-          id: "bob",
-          properties: { role: "viewer" },
-        },
+        subject: { type: "user", id: "bob", properties: { role: "viewer" } },
+        action: { name: "write" },
         resource: {
           type: "document",
           id: "report",
           properties: { classification: "confidential" },
         },
-        action: { name: "write" },
       },
     ];
 
@@ -69,18 +66,6 @@ async function run(): Promise<void> {
     bulkResponses.forEach((response, index) => {
       console.log(`Check ${index + 1}: ${response.decision}`);
     });
-
-    // Example 4: Check with context
-    console.log("\nExample 4: Checking with additional context...");
-    const response4 = await client.check({
-      subjectType: "user",
-      subjectId: "alice",
-      resourceType: "api",
-      resourceId: "payment-service",
-      action: "execute",
-      context: { ip: "192.168.1.1", timestamp: Date.now() },
-    });
-    console.log(`Decision: ${response4.decision}`);
   } catch (error) {
     console.error("Error:", error);
   }

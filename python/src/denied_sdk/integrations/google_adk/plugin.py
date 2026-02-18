@@ -157,13 +157,9 @@ class AuthorizationPlugin(BasePlugin):
         for attempt in range(self.config.retry_attempts + 1):
             try:
                 return await self.client.check(
-                    subject_type=check_request.subject.type,
-                    subject_id=check_request.subject.id,
-                    subject_properties=check_request.subject.properties,
-                    resource_type=check_request.resource.type,
-                    resource_id=check_request.resource.id,
-                    resource_properties=check_request.resource.properties,
+                    subject=check_request.subject,
                     action=check_request.action,
+                    resource=check_request.resource,
                     context=check_request.context,
                 )
 

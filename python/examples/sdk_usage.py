@@ -2,39 +2,47 @@ from denied_sdk import Action, CheckRequest, DeniedClient, Resource, Subject
 
 client = DeniedClient()
 
-# Example 1: Simple check
+# 1.1. Single check / Simple URI string shorthand
 result = client.check(
-    subject_type="user",
-    subject_id="alice",
-    resource_type="document",
-    resource_id="secret",
+    subject="user://alice",
     action="read",
+    resource="document://secret",
 )
 print(f"Decision: {result.decision}")
 
-# Example 2: Check with additional properties
+# 1.2. Single check / Objects as dicts
 result = client.check(
-    subject_type="user",
-    subject_id="alice",
-    resource_type="document",
-    resource_id="secret",
-    subject_properties={"role": "admin"},
-    resource_properties={"classification": "secret"},
-    action="write",
+    subject={"type": "user", "id": "alice", "properties": {"role": "admin"}},
+    action={"name": "write"},
+    resource={
+        "type": "document",
+        "id": "secret",
+        "properties": {"classification": "secret"},
+    },
 )
-print(f"Decision: {result.decision}, Reason: {result.context.reason}")
+print(f"Decision: {result.decision}")
 
-# Example 3: Bulk check
+# 1.3. Single check / Typed objects
+result = client.check(
+    subject=Subject(type="user", id="alice", properties={"role": "admin"}),
+    action=Action(name="write"),
+    resource=Resource(
+        type="document", id="secret", properties={"classification": "secret"}
+    ),
+)
+print(f"Decision: {result.decision}")
+
+# 2. Multiple bulk checks
 requests = [
     CheckRequest(
         subject=Subject(type="user", id="alice"),
-        resource=Resource(type="document", id="1"),
         action=Action(name="read"),
+        resource=Resource(type="document", id="1"),
     ),
     CheckRequest(
         subject=Subject(type="user", id="bob", properties={"role": "viewer"}),
-        resource=Resource(type="document", id="1", properties={"visibility": "public"}),
         action=Action(name="access"),
+        resource=Resource(type="document", id="1", properties={"visibility": "public"}),
     ),
 ]
 results = client.bulk_check(requests)

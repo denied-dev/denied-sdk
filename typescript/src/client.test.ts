@@ -10,7 +10,7 @@ const mockedAxios = vi.mocked(axios, true);
 describe("DeniedClient Initialization", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockedAxios.create.mockReturnValue(mockedAxios as any);
+    mockedAxios.create.mockReturnValue(mockedAxios);
   });
 
   it("should initialize with default URL", () => {
@@ -47,86 +47,129 @@ describe("DeniedClient Initialization", () => {
   });
 });
 
-describe("DeniedClient API Methods", () => {
+describe("DeniedClient API Methods - URI Strings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockedAxios.create.mockReturnValue(mockedAxios as any);
+    mockedAxios.create.mockReturnValue(mockedAxios);
   });
 
-  it("should successfully check", async () => {
+  it("should successfully check with URI strings", async () => {
     mockedAxios.post.mockResolvedValue({
       data: { decision: true, context: { reason: "Policy allows" } },
     });
 
     const client = new DeniedClient();
     const response = await client.check({
-      subjectType: "user",
-      subjectId: "alice",
-      resourceType: "document",
-      resourceId: "1",
+      subject: "user://alice",
+      resource: "document://1",
       action: "read",
     });
 
     expect(response.decision).toBe(true);
     expect(response.context?.reason).toBe("Policy allows");
     expect(mockedAxios.post).toHaveBeenCalledWith("/pdp/check", {
-      subject: { type: "user", id: "alice", properties: {} },
-      resource: { type: "document", id: "1", properties: {} },
+      subject: { type: "user", id: "alice" },
       action: { name: "read" },
+      resource: { type: "document", id: "1" },
+      context: undefined,
+    });
+  });
+
+  it("should parse URI string with id containing slashes", async () => {
+    mockedAxios.post.mockResolvedValue({ data: { decision: true } });
+
+    const client = new DeniedClient();
+    await client.check({
+      subject: "user://org/team/alice",
+      action: "read",
+      resource: "document://bucket/folder/file",
+    });
+
+    expect(mockedAxios.post).toHaveBeenCalledWith("/pdp/check", {
+      subject: { type: "user", id: "org/team/alice" },
+      resource: { type: "document", id: "bucket/folder/file" },
+      action: { name: "read" },
+      context: undefined,
+    });
+  });
+
+  it("should throw for invalid URI string subject", async () => {
+    const client = new DeniedClient();
+    await expect(
+      client.check({ subject: "user:alice", action: "read", resource: "document://1" }),
+    ).rejects.toThrow("type://id");
+  });
+
+  it("should throw for invalid URI string resource", async () => {
+    const client = new DeniedClient();
+    await expect(
+      client.check({ subject: "user://alice", action: "read", resource: "document" }),
+    ).rejects.toThrow("type://id");
+  });
+});
+
+describe("DeniedClient API Methods - Typed Objects", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedAxios.create.mockReturnValue(mockedAxios);
+  });
+
+  it("should successfully check with typed objects", async () => {
+    mockedAxios.post.mockResolvedValue({
+      data: { decision: true, context: { reason: "Policy allows" } },
+    });
+
+    const client = new DeniedClient();
+    const response = await client.check({
+      subject: { type: "user", id: "alice", properties: { role: "admin" } },
+      action: { name: "read" },
+      resource: { type: "document", id: "1" },
+    });
+
+    expect(response.decision).toBe(true);
+    expect(mockedAxios.post).toHaveBeenCalledWith("/pdp/check", {
+      subject: { type: "user", id: "alice", properties: { role: "admin" } },
+      action: { name: "read" },
+      resource: { type: "document", id: "1" },
       context: undefined,
     });
   });
 
   it("should successfully check with properties", async () => {
-    mockedAxios.post.mockResolvedValue({
-      data: { decision: false },
-    });
+    mockedAxios.post.mockResolvedValue({ data: { decision: false } });
 
     const client = new DeniedClient();
     const response = await client.check({
-      subjectType: "user",
-      subjectId: "guest",
-      subjectProperties: { role: "guest" },
-      resourceType: "document",
-      resourceId: "secret",
-      resourceProperties: { sensitivity: "high" },
+      subject: { type: "user", id: "guest", properties: { role: "guest" } },
       action: "read",
+      resource: { type: "document", id: "secret", properties: { sensitivity: "high" } },
     });
 
     expect(response.decision).toBe(false);
     expect(mockedAxios.post).toHaveBeenCalledWith("/pdp/check", {
-      subject: {
-        type: "user",
-        id: "guest",
-        properties: { role: "guest" },
-      },
-      resource: {
-        type: "document",
-        id: "secret",
-        properties: { sensitivity: "high" },
-      },
+      subject: { type: "user", id: "guest", properties: { role: "guest" } },
       action: { name: "read" },
+      resource: { type: "document", id: "secret", properties: { sensitivity: "high" } },
       context: undefined,
     });
   });
 
-  it("should use 'access' as default action", async () => {
-    mockedAxios.post.mockResolvedValue({
-      data: { decision: true },
-    });
+  it("should pass action with properties", async () => {
+    mockedAxios.post.mockResolvedValue({ data: { decision: true } });
 
     const client = new DeniedClient();
     await client.check({
-      subjectType: "user",
-      subjectId: "alice",
-      resourceType: "document",
-      resourceId: "1",
+      subject: { type: "user", id: "alice" },
+      resource: { type: "document", id: "1" },
+      action: { name: "read", properties: { times: "3" } },
     });
 
-    expect(mockedAxios.post).toHaveBeenCalledWith(
-      "/pdp/check",
-      expect.objectContaining({ action: { name: "access" } }),
-    );
+    expect(mockedAxios.post).toHaveBeenCalledWith("/pdp/check", {
+      subject: { type: "user", id: "alice" },
+      action: { name: "read", properties: { times: "3" } },
+      resource: { type: "document", id: "1" },
+      context: undefined,
+    });
   });
 
   it("should successfully bulk check", async () => {
@@ -137,22 +180,14 @@ describe("DeniedClient API Methods", () => {
     const client = new DeniedClient();
     const requests: CheckRequest[] = [
       {
-        subject: {
-          type: "user",
-          id: "alice",
-          properties: {},
-        },
-        resource: { type: "document", id: "1", properties: {} },
+        subject: { type: "user", id: "alice", properties: {} },
         action: { name: "read" },
+        resource: { type: "document", id: "1", properties: {} },
       },
       {
-        subject: {
-          type: "user",
-          id: "bob",
-          properties: {},
-        },
-        resource: { type: "document", id: "2", properties: {} },
+        subject: { type: "user", id: "bob", properties: {} },
         action: { name: "write" },
+        resource: { type: "document", id: "2", properties: {} },
       },
     ];
 
@@ -167,26 +202,22 @@ describe("DeniedClient API Methods", () => {
 describe("DeniedClient Error Handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockedAxios.create.mockReturnValue(mockedAxios as any);
+    mockedAxios.create.mockReturnValue(mockedAxios);
   });
 
   it("should handle 404 error", async () => {
     const error = {
       isAxiosError: true,
-      response: {
-        status: 404,
-        data: { error: "Not found" },
-      },
+      response: { status: 404, data: { error: "Not found" } },
     };
     mockedAxios.post.mockRejectedValue(error);
 
     const client = new DeniedClient();
     await expect(
       client.check({
-        subjectType: "user",
-        subjectId: "alice",
-        resourceType: "document",
-        resourceId: "1",
+        subject: "user://alice",
+        action: "read",
+        resource: "document://1",
       }),
     ).rejects.toThrow("HTTP 404");
   });
@@ -194,20 +225,16 @@ describe("DeniedClient Error Handling", () => {
   it("should handle 500 error", async () => {
     const error = {
       isAxiosError: true,
-      response: {
-        status: 500,
-        data: { error: "Internal server error" },
-      },
+      response: { status: 500, data: { error: "Internal server error" } },
     };
     mockedAxios.post.mockRejectedValue(error);
 
     const client = new DeniedClient();
     await expect(
       client.check({
-        subjectType: "user",
-        subjectId: "alice",
-        resourceType: "document",
-        resourceId: "1",
+        subject: "user://alice",
+        action: "read",
+        resource: "document://1",
       }),
     ).rejects.toThrow("HTTP 500");
   });
@@ -218,10 +245,9 @@ describe("DeniedClient Error Handling", () => {
     const client = new DeniedClient();
     await expect(
       client.check({
-        subjectType: "user",
-        subjectId: "alice",
-        resourceType: "document",
-        resourceId: "1",
+        subject: "user://alice",
+        action: "read",
+        resource: "document://1",
       }),
     ).rejects.toThrow("Network error");
   });
@@ -229,23 +255,16 @@ describe("DeniedClient Error Handling", () => {
   it("should handle bulkCheck error", async () => {
     const error = {
       isAxiosError: true,
-      response: {
-        status: 400,
-        data: { error: "Bad request" },
-      },
+      response: { status: 400, data: { error: "Bad request" } },
     };
     mockedAxios.post.mockRejectedValue(error);
 
     const client = new DeniedClient();
     const requests: CheckRequest[] = [
       {
-        subject: {
-          type: "user",
-          id: "alice",
-          properties: {},
-        },
-        resource: { type: "document", id: "1", properties: {} },
+        subject: { type: "user", id: "alice", properties: {} },
         action: { name: "read" },
+        resource: { type: "document", id: "1", properties: {} },
       },
     ];
 
@@ -258,7 +277,7 @@ describe("DeniedClient Configuration", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockedAxios.create.mockReturnValue(mockedAxios as any);
+    mockedAxios.create.mockReturnValue(mockedAxios);
     process.env = { ...originalEnv };
   });
 

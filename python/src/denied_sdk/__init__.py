@@ -3,11 +3,14 @@
 from .client import AsyncDeniedClient, DeniedClient
 from .schemas import (
     Action,
+    ActionLike,
     CheckRequest,
     CheckResponse,
     CheckResponseContext,
     Resource,
+    ResourceLike,
     Subject,
+    SubjectLike,
 )
 
 __all__ = [
@@ -17,6 +20,9 @@ __all__ = [
     "CheckResponse",
     "CheckResponseContext",
     "Subject",
+    "SubjectLike",
     "Resource",
+    "ResourceLike",
     "Action",
+    "ActionLike",
 ]

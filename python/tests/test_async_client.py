@@ -3,13 +3,18 @@
 import pytest
 
 from denied_sdk import AsyncDeniedClient
-from denied_sdk.schemas.check import CheckResponse
+from denied_sdk.schemas.check import (
+    Action,
+    CheckRequest,
+    CheckResponse,
+    Resource,
+    Subject,
+)
 
 
 @pytest.mark.asyncio
 async def test_async_client_check(httpx_mock):
-    """Test async check method."""
-    # Mock the Denied API response
+    """Test async check method with URI string inputs."""
     httpx_mock.add_response(
         method="POST",
         url="http://localhost:8421/pdp/check",
@@ -18,10 +23,8 @@ async def test_async_client_check(httpx_mock):
 
     async with AsyncDeniedClient(url="http://localhost:8421") as client:
         response = await client.check(
-            subject_type="user",
-            subject_id="alice",
-            resource_type="tool",
-            resource_id="write_file",
+            subject="user://alice",
+            resource="tool://write_file",
             action="execute",
         )
 
@@ -31,7 +34,7 @@ async def test_async_client_check(httpx_mock):
 
 @pytest.mark.asyncio
 async def test_async_client_check_denied(httpx_mock):
-    """Test async check with denial."""
+    """Test async check with denial using URI strings."""
     httpx_mock.add_response(
         method="POST",
         url="https://api.denied.dev/pdp/check",
@@ -43,10 +46,8 @@ async def test_async_client_check_denied(httpx_mock):
 
     async with AsyncDeniedClient() as client:
         response = await client.check(
-            subject_type="user",
-            subject_id="bob",
-            resource_type="tool",
-            resource_id="delete_database",
+            subject="user://bob",
+            resource="tool://delete_database",
             action="execute",
         )
 
@@ -55,8 +56,8 @@ async def test_async_client_check_denied(httpx_mock):
 
 
 @pytest.mark.asyncio
-async def test_async_client_with_properties(httpx_mock):
-    """Test async check with properties."""
+async def test_async_client_with_objects(httpx_mock):
+    """Test async check with typed objects including properties."""
     httpx_mock.add_response(
         method="POST",
         url="https://api.denied.dev/pdp/check",
@@ -65,13 +66,34 @@ async def test_async_client_with_properties(httpx_mock):
 
     async with AsyncDeniedClient() as client:
         response = await client.check(
-            subject_type="user",
-            subject_id="admin",
-            subject_properties={"role": "admin", "department": "engineering"},
-            resource_type="tool",
-            resource_id="write_file",
-            resource_properties={"tool_name": "write_file", "file_path": "/etc/passwd"},
+            subject=Subject(
+                type="user",
+                id="admin",
+                properties={"role": "admin", "department": "engineering"},
+            ),
+            resource=Resource(
+                type="tool", id="write_file", properties={"file_path": "/etc/passwd"}
+            ),
             action="write",
+        )
+
+        assert response.decision is True
+
+
+@pytest.mark.asyncio
+async def test_async_client_with_dicts(httpx_mock):
+    """Test async check with dict inputs."""
+    httpx_mock.add_response(
+        method="POST",
+        url="https://api.denied.dev/pdp/check",
+        json={"decision": True},
+    )
+
+    async with AsyncDeniedClient() as client:
+        response = await client.check(
+            subject={"type": "user", "id": "alice", "properties": {"role": "admin"}},
+            resource={"type": "document", "id": "1"},
+            action={"name": "read"},
         )
 
         assert response.decision is True
@@ -80,8 +102,6 @@ async def test_async_client_with_properties(httpx_mock):
 @pytest.mark.asyncio
 async def test_async_client_bulk_check(httpx_mock):
     """Test async bulk_check method."""
-    from denied_sdk.schemas.check import Action, CheckRequest, Resource, Subject
-
     httpx_mock.add_response(
         method="POST",
         url="https://api.denied.dev/pdp/check/bulk",
@@ -120,5 +140,4 @@ async def test_async_client_context_manager():
     async with client:
         assert client.client is not None
 
-    # Client should be closed after exiting context
     assert client.client.is_closed
