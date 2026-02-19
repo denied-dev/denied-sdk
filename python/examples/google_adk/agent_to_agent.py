@@ -12,19 +12,19 @@ Policy Rules (in Denied):
 ```rego
 # Tier-1 agent can only read
 allow {
-    input.principal.attributes.agent_name == "tier1_support"
-    input.action == "read"
+    input.subject.properties.agent_name == "tier1_support"
+    input.action.name == "read"
 }
 
 # Allow tier1 to delegate to supervisor
 allow {
-    input.principal.attributes.agent_name == "tier1_support"
-    input.resource.attributes.tool_name == "transfer_to_agent"
+    input.subject.properties.agent_name == "tier1_support"
+    input.resource.properties.tool_name == "transfer_to_agent"
 }
 
 # Supervisor agent can do everything
 allow {
-    input.principal.attributes.agent_name == "supervisor_support"
+    input.subject.properties.agent_name == "supervisor_support"
 }
 ```
 

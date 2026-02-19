@@ -17,9 +17,9 @@ class AuthorizationConfig(BaseModel):
             "open": Allow access when service is unavailable (available).
         retry_attempts: Number of retry attempts for failed authorization checks.
         timeout_seconds: Timeout for authorization service requests in seconds.
-        extract_tool_args: Whether to extract tool arguments into resource attributes.
-        user_id: User ID to use for principal. Can be provided at callback creation.
-        session_id: Session ID to include in principal attributes.
+        extract_tool_args: Whether to extract tool arguments into resource properties.
+        user_id: User ID to use for subject. Can be provided at callback creation.
+        session_id: Session ID to include in subject properties.
 
     Example:
         config = AuthorizationConfig(
@@ -57,17 +57,17 @@ class AuthorizationConfig(BaseModel):
     # Context extraction
     extract_tool_args: bool = Field(
         default=True,
-        description="Whether to extract tool arguments into resource attributes",
+        description="Whether to extract tool arguments into resource properties",
     )
 
-    # Principal context (captured at callback creation)
+    # Subject context (captured at callback creation)
     user_id: str | None = Field(
         default=None,
-        description="User ID to use for principal identification",
+        description="User ID to use for subject identification",
     )
     session_id: str | None = Field(
         default=None,
-        description="Session ID to include in principal attributes",
+        description="Session ID to include in subject properties",
     )
 
     @model_validator(mode="before")

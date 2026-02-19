@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from denied_sdk import AsyncDeniedClient
+from denied_sdk import AsyncDeniedClient, CheckResponseContext
 from denied_sdk.integrations.claude_sdk.callback import (
     create_denied_permission_callback,
 )
@@ -43,7 +43,9 @@ def mock_context():
 @pytest.mark.asyncio
 async def test_callback_allows_authorized_call(config, mock_client, mock_context):
     """Test callback allows execution when authorized."""
-    mock_client.check.return_value = CheckResponse(allowed=True, reason=None, rules=[])
+    mock_client.check.return_value = CheckResponse(
+        decision=True, context=CheckResponseContext(reason=None, rules=[])
+    )
 
     callback = create_denied_permission_callback(
         config=config,
@@ -60,9 +62,10 @@ async def test_callback_allows_authorized_call(config, mock_client, mock_context
 async def test_callback_denies_unauthorized_call(config, mock_client, mock_context):
     """Test callback blocks execution when denied."""
     mock_client.check.return_value = CheckResponse(
-        allowed=False,
-        reason="Insufficient permissions",
-        rules=["policy-123"],
+        decision=False,
+        context=CheckResponseContext(
+            reason="Insufficient permissions", rules=["policy-123"]
+        ),
     )
 
     callback = create_denied_permission_callback(
@@ -116,7 +119,9 @@ async def test_callback_retry_logic(config, mock_client, mock_context):
     mock_client.check.side_effect = [
         Exception("Timeout"),
         Exception("Timeout"),
-        CheckResponse(allowed=True, reason=None, rules=[]),
+        CheckResponse(
+            decision=True, context=CheckResponseContext(reason=None, rules=[])
+        ),
     ]
 
     config.retry_attempts = 2  # Will try 3 times total (initial + 2 retries)
@@ -152,7 +157,9 @@ async def test_callback_retry_exhausted(config, mock_client, mock_context):
 @pytest.mark.asyncio
 async def test_callback_user_id_override(config, mock_client, mock_context):
     """Test user_id can be overridden at callback creation."""
-    mock_client.check.return_value = CheckResponse(allowed=True, reason=None, rules=[])
+    mock_client.check.return_value = CheckResponse(
+        decision=True, context=CheckResponseContext(reason=None, rules=[])
+    )
 
     callback = create_denied_permission_callback(
         config=config,
@@ -164,13 +171,15 @@ async def test_callback_user_id_override(config, mock_client, mock_context):
 
     # Verify the call was made with bob as the user
     call_args = mock_client.check.call_args
-    assert "bob" in call_args.kwargs["principal_uri"]
+    assert "bob" in call_args.kwargs["subject"].id
 
 
 @pytest.mark.asyncio
 async def test_callback_session_id_override(config, mock_client, mock_context):
     """Test session_id can be overridden at callback creation."""
-    mock_client.check.return_value = CheckResponse(allowed=True, reason=None, rules=[])
+    mock_client.check.return_value = CheckResponse(
+        decision=True, context=CheckResponseContext(reason=None, rules=[])
+    )
 
     callback = create_denied_permission_callback(
         config=config,
@@ -182,35 +191,39 @@ async def test_callback_session_id_override(config, mock_client, mock_context):
 
     # Verify the call was made with new-session
     call_args = mock_client.check.call_args
-    assert call_args.kwargs["principal_attributes"]["session_id"] == "new-session"
+    assert call_args.kwargs["subject"].properties["session_id"] == "new-session"
 
 
 @pytest.mark.asyncio
-async def test_callback_principal_attributes(config, mock_client, mock_context):
-    """Test principal_attributes are passed to authorization check."""
-    mock_client.check.return_value = CheckResponse(allowed=True, reason=None, rules=[])
+async def test_callback_subject_properties(config, mock_client, mock_context):
+    """Test subject_properties are passed to authorization check."""
+    mock_client.check.return_value = CheckResponse(
+        decision=True, context=CheckResponseContext(reason=None, rules=[])
+    )
 
     callback = create_denied_permission_callback(
         config=config,
         denied_client=mock_client,
-        principal_attributes={"role": "admin", "department": "engineering"},
+        subject_properties={"role": "admin", "department": "engineering"},
     )
 
     await callback("Write", {}, mock_context)
 
     call_args = mock_client.check.call_args
-    principal_attrs = call_args.kwargs["principal_attributes"]
-    assert principal_attrs["role"] == "admin"
-    assert principal_attrs["department"] == "engineering"
+    subject_props = call_args.kwargs["subject"].properties
+    assert subject_props["role"] == "admin"
+    assert subject_props["department"] == "engineering"
     # user_id and session_id from config should also be present
-    assert principal_attrs["user_id"] == "alice"
-    assert principal_attrs["session_id"] == "session-123"
+    assert subject_props["user_id"] == "alice"
+    assert subject_props["session_id"] == "session-123"
 
 
 @pytest.mark.asyncio
-async def test_callback_principal_attributes_without_user_id(mock_client, mock_context):
-    """Test principal_attributes work without user_id."""
-    mock_client.check.return_value = CheckResponse(allowed=True, reason=None, rules=[])
+async def test_callback_subject_properties_without_user_id(mock_client, mock_context):
+    """Test subject_properties work without user_id."""
+    mock_client.check.return_value = CheckResponse(
+        decision=True, context=CheckResponseContext(reason=None, rules=[])
+    )
 
     config = AuthorizationConfig(
         denied_url="http://localhost:8421",
@@ -220,22 +233,24 @@ async def test_callback_principal_attributes_without_user_id(mock_client, mock_c
     callback = create_denied_permission_callback(
         config=config,
         denied_client=mock_client,
-        principal_attributes={"role": "viewer"},
+        subject_properties={"role": "viewer"},
     )
 
     await callback("Read", {}, mock_context)
 
     call_args = mock_client.check.call_args
-    principal_attrs = call_args.kwargs["principal_attributes"]
-    assert principal_attrs["role"] == "viewer"
+    subject_props = call_args.kwargs["subject"].properties
+    assert subject_props["role"] == "viewer"
     # user_id not in config, so should not be present
-    assert "user_id" not in principal_attrs
+    assert "user_id" not in subject_props
 
 
 @pytest.mark.asyncio
 async def test_callback_with_tool_args(config, mock_client, mock_context):
     """Test callback passes tool arguments to authorization check."""
-    mock_client.check.return_value = CheckResponse(allowed=True, reason=None, rules=[])
+    mock_client.check.return_value = CheckResponse(
+        decision=True, context=CheckResponseContext(reason=None, rules=[])
+    )
 
     callback = create_denied_permission_callback(
         config=config,
@@ -249,16 +264,18 @@ async def test_callback_with_tool_args(config, mock_client, mock_context):
     )
 
     call_args = mock_client.check.call_args
-    resource_attrs = call_args.kwargs["resource_attributes"]
+    resource_props = call_args.kwargs["resource"].properties
     # tool_input should be wrapped in {"values": ...} structure
-    assert resource_attrs["tool_input"]["values"]["file_path"] == "/home/alice/doc.txt"
-    assert resource_attrs["tool_input"]["values"]["content"] == "hello"
+    assert resource_props["tool_input"]["values"]["file_path"] == "/home/alice/doc.txt"
+    assert resource_props["tool_input"]["values"]["content"] == "hello"
 
 
 @pytest.mark.asyncio
 async def test_callback_action_inference(config, mock_client, mock_context):
     """Test callback infers correct action from tool name."""
-    mock_client.check.return_value = CheckResponse(allowed=True, reason=None, rules=[])
+    mock_client.check.return_value = CheckResponse(
+        decision=True, context=CheckResponseContext(reason=None, rules=[])
+    )
 
     callback = create_denied_permission_callback(
         config=config,
@@ -267,22 +284,22 @@ async def test_callback_action_inference(config, mock_client, mock_context):
 
     # Test Read tool -> read action
     await callback("Read", {}, mock_context)
-    assert mock_client.check.call_args.kwargs["action"] == "read"
+    assert mock_client.check.call_args.kwargs["action"].name == "read"
 
     # Test Write tool -> create action
     mock_client.check.reset_mock()
     await callback("Write", {}, mock_context)
-    assert mock_client.check.call_args.kwargs["action"] == "create"
+    assert mock_client.check.call_args.kwargs["action"].name == "create"
 
     # Test Edit tool -> update action
     mock_client.check.reset_mock()
     await callback("Edit", {}, mock_context)
-    assert mock_client.check.call_args.kwargs["action"] == "update"
+    assert mock_client.check.call_args.kwargs["action"].name == "update"
 
     # Test Bash tool -> execute action
     mock_client.check.reset_mock()
     await callback("Bash", {}, mock_context)
-    assert mock_client.check.call_args.kwargs["action"] == "execute"
+    assert mock_client.check.call_args.kwargs["action"].name == "execute"
 
 
 def test_callback_default_config():

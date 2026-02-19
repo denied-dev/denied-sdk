@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 from google.adk.plugins.base_plugin import BasePlugin
 
 from denied_sdk import AsyncDeniedClient
-from denied_sdk.schemas.check import CheckResponse
+from denied_sdk.schemas.check import CheckRequest, CheckResponse
 
 from .config import AuthorizationConfig
 from .context_mapper import ContextMapper
@@ -107,9 +107,9 @@ class AuthorizationPlugin(BasePlugin):
         # Debug: Log the check request
         logger.debug(
             f"Authorization check request: "
-            f"principal={check_request.principal.model_dump()}, "
+            f"subject={check_request.subject.model_dump()}, "
             f"resource={check_request.resource.model_dump()}, "
-            f"action={check_request.action}"
+            f"action={check_request.action.model_dump()}"
         )
 
         # Perform authorization check with retry
@@ -130,20 +130,23 @@ class AuthorizationPlugin(BasePlugin):
             return None
 
         # Handle authorization decision
-        if not check_result.allowed:
+        if not check_result.decision:
+            reason = check_result.context.reason if check_result.context else None
             logger.info(
                 f"Authorization DENIED for tool={tool.name}, "
                 f"user={tool_context.user_id}, "
-                f"reason={check_result.reason}"
+                f"reason={reason or 'No reason'}"
             )
-            return self._create_denial_response(check_result.reason)
+            return self._create_denial_response(reason)
 
         logger.debug(
             f"Authorization ALLOWED for tool={tool.name}, user={tool_context.user_id}"
         )
         return None  # Allow execution
 
-    async def _check_with_retry(self, check_request) -> CheckResponse | None:
+    async def _check_with_retry(
+        self, check_request: CheckRequest
+    ) -> CheckResponse | None:
         """Perform authorization check with retry logic.
 
         Args:
@@ -155,11 +158,10 @@ class AuthorizationPlugin(BasePlugin):
         for attempt in range(self.config.retry_attempts + 1):
             try:
                 return await self.client.check(
-                    principal_uri=check_request.principal.uri,
-                    principal_attributes=check_request.principal.attributes,
-                    resource_uri=check_request.resource.uri,
-                    resource_attributes=check_request.resource.attributes,
+                    subject=check_request.subject,
                     action=check_request.action,
+                    resource=check_request.resource,
+                    context=check_request.context,
                 )
 
             except Exception as e:

@@ -19,7 +19,7 @@
  * 7. Claude proceeds or receives denial
  *
  * Policy Rules (in Denied):
- * - Allow: principal.role='user' AND resource.scope='user' AND action='read'
+ * - Allow: subject.properties.role='user' AND resource.properties.scope='user' AND action.name='read'
  *
  * Setup:
  * 1. Install: pnpm add @anthropic-ai/claude-agent-sdk
@@ -120,7 +120,7 @@ async function runScenario(options: ScenarioOptions): Promise<void> {
 
   // Permission callback intercepts ALL tool calls including our custom MCP tools
   // Tool names will be like: mcp__projects__read_project, mcp__projects__delete_project
-  // Pass principal_attributes with role and resource_attributes with scope for policy matching
+  // Pass subjectProperties with role and resourceProperties with scope for policy matching
   const permissionCallback = createDeniedPermissionCallback({
     config: {
       deniedUrl: process.env.DENIED_URL,
@@ -129,8 +129,8 @@ async function runScenario(options: ScenarioOptions): Promise<void> {
       timeoutSeconds: 15, // Allow for cold starts
     },
     userId,
-    principalAttributes: { role },
-    resourceAttributes: { scope },
+    subjectProperties: { role },
+    resourceProperties: { scope },
   });
 
   // IMPORTANT: Do NOT use allowedTools here!

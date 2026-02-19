@@ -34,19 +34,19 @@ export interface AuthorizationConfig {
   timeoutSeconds?: number;
 
   /**
-   * Whether to extract tool arguments into resource attributes.
+   * Whether to extract tool arguments into resource properties.
    * @default true
    */
   extractToolArgs?: boolean;
 
   /**
-   * User ID to use for principal identification.
+   * User ID to use for subject identification.
    * Can be provided at callback creation.
    */
   userId?: string;
 
   /**
-   * Session ID to include in principal attributes.
+   * Session ID to include in subject properties.
    */
   sessionId?: string;
 }

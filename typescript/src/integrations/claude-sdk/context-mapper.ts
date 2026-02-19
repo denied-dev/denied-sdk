@@ -2,8 +2,7 @@
  * Maps Claude Agent SDK tool execution context to Denied authorization model.
  */
 
-import { EntityType } from "../../enums";
-import type { CheckRequest, PrincipalCheck, ResourceCheck } from "../../schemas";
+import type { Action, CheckRequest, Resource, Subject } from "../../schemas";
 import { extractAction } from "../shared";
 import type { ResolvedAuthorizationConfig } from "./config";
 
@@ -15,56 +14,55 @@ import type { ResolvedAuthorizationConfig } from "./config";
  */
 export class ContextMapper {
   private readonly config: ResolvedAuthorizationConfig;
-  private readonly principalAttributes: Record<string, unknown>;
-  private readonly resourceAttributes: Record<string, unknown>;
+  private readonly subjectProperties: Record<string, unknown>;
+  private readonly resourceProperties: Record<string, unknown>;
 
   /**
    * Initialize the context mapper.
    *
    * @param config - Configuration controlling context extraction.
-   * @param principalAttributes - Custom attributes to include in the principal (e.g., \{ role: "admin" \}).
-   * @param resourceAttributes - Custom attributes to include in the resource (e.g., \{ scope: "user" \}).
+   * @param subjectProperties - Custom properties to include in the subject (e.g., \{ role: "admin" \}).
+   * @param resourceProperties - Custom properties to include in the resource (e.g., \{ scope: "user" \}).
    */
   constructor(
     config: ResolvedAuthorizationConfig,
-    principalAttributes?: Record<string, unknown>,
-    resourceAttributes?: Record<string, unknown>,
+    subjectProperties?: Record<string, unknown>,
+    resourceProperties?: Record<string, unknown>,
   ) {
     this.config = config;
-    this.principalAttributes = principalAttributes ?? {};
-    this.resourceAttributes = resourceAttributes ?? {};
+    this.subjectProperties = subjectProperties ?? {};
+    this.resourceProperties = resourceProperties ?? {};
   }
 
   /**
-   * Extract principal information from configuration.
+   * Extract subject information from configuration.
    *
    * Since Claude Agent SDK's can_use_tool callback doesn't provide user context
-   * directly, principal information is captured at callback creation time via
+   * directly, subject information is captured at callback creation time via
    * the factory pattern.
    *
-   * @returns PrincipalCheck with URI and attributes for the principal.
+   * @returns Subject with type, id, and properties for the subject.
    */
-  extractPrincipal(): PrincipalCheck {
-    // Start with custom principal attributes (e.g., role, scope)
-    const attributes: Record<string, unknown> = { ...this.principalAttributes };
+  extractSubject(): Subject {
+    // Start with custom subject properties (e.g., role, scope)
+    const properties: Record<string, unknown> = { ...this.subjectProperties };
 
     // Add user_id and session_id if provided
     if (this.config.userId) {
-      attributes.user_id = this.config.userId;
+      properties.user_id = this.config.userId;
     }
 
     if (this.config.sessionId) {
-      attributes.session_id = this.config.sessionId;
+      properties.session_id = this.config.sessionId;
     }
 
-    // Build principal URI
-    const principalId = this.config.userId ?? "claude-agent";
-    const principalUri = `user:${principalId}`;
+    // Build subject id
+    const subjectId = this.config.userId ?? "claude-agent";
 
     return {
-      type: EntityType.Principal,
-      uri: principalUri,
-      attributes: Object.keys(attributes).length > 0 ? attributes : undefined,
+      type: "user",
+      id: subjectId,
+      properties: Object.keys(properties).length > 0 ? properties : undefined,
     };
   }
 
@@ -73,27 +71,24 @@ export class ContextMapper {
    *
    * @param toolName - Name of the tool being invoked.
    * @param toolInput - Arguments passed to the tool.
-   * @returns ResourceCheck with URI and attributes for the resource.
+   * @returns Resource with type, id, and properties for the resource.
    */
-  extractResource(toolName: string, toolInput: Record<string, unknown>): ResourceCheck {
-    // Start with custom resource attributes (e.g., scope)
-    const attributes: Record<string, unknown> = { ...this.resourceAttributes };
+  extractResource(toolName: string, toolInput: Record<string, unknown>): Resource {
+    // Start with custom resource properties (e.g., scope)
+    const properties: Record<string, unknown> = { ...this.resourceProperties };
 
     // Add tool name
-    attributes.tool_name = toolName;
+    properties.tool_name = toolName;
 
     // Add tool input if configured (aligned with ADK structure)
     if (this.config.extractToolArgs && Object.keys(toolInput).length > 0) {
-      attributes.tool_input = { values: toolInput };
+      properties.tool_input = { values: toolInput };
     }
 
-    // Build resource URI
-    const resourceUri = `tool:${toolName}`;
-
     return {
-      type: EntityType.Resource,
-      uri: resourceUri,
-      attributes,
+      type: "tool",
+      id: toolName,
+      properties,
     };
   }
 
@@ -108,13 +103,14 @@ export class ContextMapper {
     toolName: string,
     toolInput: Record<string, unknown>,
   ): CheckRequest {
-    const principal = this.extractPrincipal();
+    const subject = this.extractSubject();
     const resource = this.extractResource(toolName, toolInput);
     // Pass toolInput for Bash command analysis
-    const action = extractAction(toolName, toolInput);
+    const actionName = extractAction(toolName, toolInput);
+    const action: Action = { name: actionName };
 
     return {
-      principal,
+      subject,
       resource,
       action,
     };

@@ -1,9 +1,8 @@
 import os
-from typing import Any
 
 import httpx
 
-from .schemas import CheckRequest, CheckResponse, PrincipalCheck, ResourceCheck
+from .schemas import ActionLike, CheckRequest, CheckResponse, ResourceLike, SubjectLike
 
 
 class BaseDeniedClient:
@@ -48,28 +47,6 @@ class BaseDeniedClient:
             headers["X-API-Key"] = self._api_key
         return headers
 
-    def _build_check_request(
-        self,
-        principal_uri: str | None,
-        resource_uri: str | None,
-        principal_attributes: dict[str, Any] | None,
-        resource_attributes: dict[str, Any] | None,
-        action: str,
-    ) -> CheckRequest:
-        """Build a CheckRequest from parameters."""
-        if principal_attributes is None:
-            principal_attributes = {}
-        if resource_attributes is None:
-            resource_attributes = {}
-
-        return CheckRequest(
-            principal=PrincipalCheck(
-                uri=principal_uri, attributes=principal_attributes
-            ),
-            resource=ResourceCheck(uri=resource_uri, attributes=resource_attributes),
-            action=action,
-        )
-
     @staticmethod
     def _handle_response(response: httpx.Response) -> None:
         """
@@ -100,7 +77,7 @@ class DeniedClient(BaseDeniedClient):
     """
     A synchronous client for interacting with the Denied authorization server.
 
-    This client provides methods to check permissions for principals
+    This client provides methods to check permissions for subjects
     performing actions on resources.
 
     The client should be used as a context manager to ensure proper cleanup
@@ -161,44 +138,45 @@ class DeniedClient(BaseDeniedClient):
 
     def check(
         self,
-        principal_uri: str | None = None,
-        resource_uri: str | None = None,
-        principal_attributes: dict | None = None,
-        resource_attributes: dict | None = None,
-        action: str = "access",
+        subject: SubjectLike,
+        action: ActionLike,
+        resource: ResourceLike,
+        context: dict | None = None,
     ) -> CheckResponse:
         """
-        Check whether a principal has permissions to perform an action on a resource.
+        Check whether a subject has permissions to perform an action on a resource.
 
         Parameters
         ----------
-        principal_uri : str, optional
-            The identifier of the principal. Can be provided for registered principals.
-        resource_uri : str, optional
-            The identifier of the resource. Can be provided for registered resources.
-        principal_attributes : dict, optional
-            The attributes of the principal. Should be provided if the principal is not registered.
-        resource_attributes : dict, optional
-            The attributes of the resource. Should be provided if the resource is not registered.
-        action : str, optional
-            The action to check permissions for. Defaults to "access".
+        subject : Subject, dict, or str
+            The subject performing the action. Can be a Subject object,
+            a dict with ``type`` and ``id`` keys and optional ``properties``,
+            or a ``"type://id"`` string.
+        action : Action, dict, or str, optional
+            The action to check permissions for. Can be an Action object,
+            a dict with a ``name`` key and optional ``properties``,
+            or a plain string action name.
+        resource : Resource, dict, or str
+            The resource being acted on. Can be a Resource object,
+            a dict with ``type`` and ``id`` keys and optional ``properties``,
+            or a ``"type://id"`` string.
+        context : dict, optional
+            Additional context for the authorization check.
 
         Returns
         -------
         CheckResponse
-            The response containing the allowed flag and the reason for the decision.
+            The response containing the decision and optional context.
 
         Raises
         ------
         httpx.HTTPStatusError
             If the HTTP request returns an unsuccessful status code.
+        ValueError
+            If a string subject or resource does not match the ``"type://id"`` format.
         """
-        request = self._build_check_request(
-            principal_uri,
-            resource_uri,
-            principal_attributes,
-            resource_attributes,
-            action,
+        request = CheckRequest(
+            subject=subject, action=action, resource=resource, context=context
         )
         response = self.client.post("/pdp/check", json=request.model_dump())
         self._handle_response(response)
@@ -235,7 +213,7 @@ class AsyncDeniedClient(BaseDeniedClient):
     """
     An asynchronous client for interacting with the Denied authorization server.
 
-    This client provides async methods to check permissions for principals
+    This client provides async methods to check permissions for subjects
     performing actions on resources.
 
     The client should be used as an async context manager to ensure proper cleanup
@@ -296,44 +274,45 @@ class AsyncDeniedClient(BaseDeniedClient):
 
     async def check(
         self,
-        principal_uri: str | None = None,
-        resource_uri: str | None = None,
-        principal_attributes: dict | None = None,
-        resource_attributes: dict | None = None,
-        action: str = "access",
+        subject: SubjectLike,
+        action: ActionLike,
+        resource: ResourceLike,
+        context: dict | None = None,
     ) -> CheckResponse:
         """
-        Asynchronously check whether a principal has permissions.
+        Asynchronously check whether a subject has permissions to perform an action on a resource.
 
         Parameters
         ----------
-        principal_uri : str, optional
-            The identifier of the principal. Can be provided for registered principals.
-        resource_uri : str, optional
-            The identifier of the resource. Can be provided for registered resources.
-        principal_attributes : dict, optional
-            The attributes of the principal. Should be provided if the principal is not registered.
-        resource_attributes : dict, optional
-            The attributes of the resource. Should be provided if the resource is not registered.
-        action : str, optional
-            The action to check permissions for. Defaults to "access".
+        subject : Subject, dict, or str
+            The subject performing the action. Can be a Subject object,
+            a dict with ``type`` and ``id`` keys and optional ``properties``,
+            or a ``"type://id"`` string.
+        action : Action, dict, or str, optional
+            The action to check permissions for. Can be an Action object,
+            a dict with a ``name`` key and optional ``properties``,
+            or a plain string action name.
+        resource : Resource, dict, or str
+            The resource being acted on. Can be a Resource object,
+            a dict with ``type`` and ``id`` keys and optional ``properties``,
+            or a ``"type://id"`` string.
+        context : dict, optional
+            Additional context for the authorization check.
 
         Returns
         -------
         CheckResponse
-            The response containing the allowed flag and the reason for the decision.
+            The response containing the decision and optional context.
 
         Raises
         ------
         httpx.HTTPStatusError
             If the HTTP request returns an unsuccessful status code.
+        ValueError
+            If a string subject or resource does not match the ``"type://id"`` format.
         """
-        request = self._build_check_request(
-            principal_uri,
-            resource_uri,
-            principal_attributes,
-            resource_attributes,
-            action,
+        request = CheckRequest(
+            subject=subject, action=action, resource=resource, context=context
         )
         response = await self.client.post("/pdp/check", json=request.model_dump())
         self._handle_response(response)

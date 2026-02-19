@@ -17,7 +17,7 @@ class AuthorizationConfig(BaseModel):
             "open": Allow access when service is unavailable (available).
         retry_attempts: Number of retry attempts for failed authorization checks.
         timeout_seconds: Timeout for authorization service requests in seconds.
-        extract_tool_args: Whether to extract tool arguments into resource attributes.
+        extract_tool_args: Whether to extract tool arguments into resource properties.
     """
 
     denied_url: str | None = Field(
@@ -48,15 +48,15 @@ class AuthorizationConfig(BaseModel):
     # Context extraction
     extract_tool_args: bool = Field(
         default=True,
-        description="Whether to extract tool arguments into resource attributes",
+        description="Whether to extract tool arguments into resource properties",
     )
-    principal_state_keys: list[str] = Field(
+    subject_state_keys: list[str] = Field(
         default_factory=list,
-        description="Session state keys to extract into principal attributes",
+        description="Session state keys to extract into subject properties",
     )
     resource_state_keys: list[str] = Field(
         default_factory=list,
-        description="Session state keys to extract into resource attributes",
+        description="Session state keys to extract into resource properties",
     )
 
     @model_validator(mode="before")

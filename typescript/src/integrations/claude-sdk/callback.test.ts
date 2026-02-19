@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createDeniedPermissionCallback } from "./callback";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DeniedClient } from "../../client";
+import { createDeniedPermissionCallback } from "./callback";
 
 // Mock the DeniedClient
 vi.mock("../../client", () => ({
@@ -33,7 +33,7 @@ describe("createDeniedPermissionCallback", () => {
 
   describe("allow behavior", () => {
     it("should return allow when authorization succeeds", async () => {
-      mockClient.check.mockResolvedValue({ allowed: true });
+      mockClient.check.mockResolvedValue({ decision: true });
 
       const callback = createDeniedPermissionCallback({
         userId: "user-123",
@@ -51,26 +51,33 @@ describe("createDeniedPermissionCallback", () => {
     });
 
     it("should pass correct parameters to Denied service", async () => {
-      mockClient.check.mockResolvedValue({ allowed: true });
+      mockClient.check.mockResolvedValue({ decision: true });
 
       const callback = createDeniedPermissionCallback({
         userId: "user-123",
-        principalAttributes: { role: "admin" },
-        resourceAttributes: { scope: "project" },
+        subjectProperties: { role: "admin" },
+        resourceProperties: { scope: "project" },
       });
 
       await callback("Write", { file_path: "/test.txt" }, mockOptions);
 
       expect(mockClient.check).toHaveBeenCalledWith({
-        principalUri: "user:user-123",
-        principalAttributes: { user_id: "user-123", role: "admin" },
-        resourceUri: "tool:Write",
-        resourceAttributes: {
-          tool_name: "Write",
-          scope: "project",
-          tool_input: { values: { file_path: "/test.txt" } },
+        subject: {
+          type: "user",
+          id: "user-123",
+          properties: { user_id: "user-123", role: "admin" },
         },
-        action: "create",
+        action: { name: "create" },
+        resource: {
+          type: "tool",
+          id: "Write",
+          properties: {
+            tool_name: "Write",
+            scope: "project",
+            tool_input: { values: { file_path: "/test.txt" } },
+          },
+        },
+        context: undefined,
       });
     });
   });
@@ -78,8 +85,10 @@ describe("createDeniedPermissionCallback", () => {
   describe("deny behavior", () => {
     it("should return deny when authorization fails", async () => {
       mockClient.check.mockResolvedValue({
-        allowed: false,
-        reason: "Insufficient permissions",
+        decision: false,
+        context: {
+          reason: "Insufficient permissions",
+        },
       });
 
       const callback = createDeniedPermissionCallback({
@@ -93,7 +102,7 @@ describe("createDeniedPermissionCallback", () => {
     });
 
     it("should use default message when no reason provided", async () => {
-      mockClient.check.mockResolvedValue({ allowed: false });
+      mockClient.check.mockResolvedValue({ decision: false });
 
       const callback = createDeniedPermissionCallback({
         userId: "user-123",
@@ -146,7 +155,7 @@ describe("createDeniedPermissionCallback", () => {
     it("should retry on failure", async () => {
       mockClient.check
         .mockRejectedValueOnce(new Error("Temporary error"))
-        .mockResolvedValueOnce({ allowed: true });
+        .mockResolvedValueOnce({ decision: true });
 
       const callback = createDeniedPermissionCallback({
         userId: "user-123",
@@ -176,7 +185,7 @@ describe("createDeniedPermissionCallback", () => {
 
   describe("configuration", () => {
     it("should use provided DeniedClient", async () => {
-      const customClient = { check: vi.fn().mockResolvedValue({ allowed: true }) };
+      const customClient = { check: vi.fn().mockResolvedValue({ decision: true }) };
 
       const callback = createDeniedPermissionCallback({
         deniedClient: customClient as unknown as DeniedClient,
@@ -190,7 +199,7 @@ describe("createDeniedPermissionCallback", () => {
     });
 
     it("should override config with userId/sessionId parameters", async () => {
-      mockClient.check.mockResolvedValue({ allowed: true });
+      mockClient.check.mockResolvedValue({ decision: true });
 
       const callback = createDeniedPermissionCallback({
         config: { userId: "config-user", sessionId: "config-session" },
@@ -202,10 +211,13 @@ describe("createDeniedPermissionCallback", () => {
 
       expect(mockClient.check).toHaveBeenCalledWith(
         expect.objectContaining({
-          principalUri: "user:override-user",
-          principalAttributes: expect.objectContaining({
-            user_id: "override-user",
-            session_id: "override-session",
+          subject: expect.objectContaining({
+            type: "user",
+            id: "override-user",
+            properties: expect.objectContaining({
+              user_id: "override-user",
+              session_id: "override-session",
+            }),
           }),
         }),
       );
@@ -214,7 +226,7 @@ describe("createDeniedPermissionCallback", () => {
 
   describe("action mapping", () => {
     it("should map tool names to correct actions", async () => {
-      mockClient.check.mockResolvedValue({ allowed: true });
+      mockClient.check.mockResolvedValue({ decision: true });
 
       const callback = createDeniedPermissionCallback({
         userId: "user-123",
@@ -222,22 +234,22 @@ describe("createDeniedPermissionCallback", () => {
 
       await callback("Read", {}, mockOptions);
       expect(mockClient.check).toHaveBeenCalledWith(
-        expect.objectContaining({ action: "read" }),
+        expect.objectContaining({ action: { name: "read" } }),
       );
 
       await callback("Write", {}, mockOptions);
       expect(mockClient.check).toHaveBeenCalledWith(
-        expect.objectContaining({ action: "create" }),
+        expect.objectContaining({ action: { name: "create" } }),
       );
 
       await callback("Edit", {}, mockOptions);
       expect(mockClient.check).toHaveBeenCalledWith(
-        expect.objectContaining({ action: "update" }),
+        expect.objectContaining({ action: { name: "update" } }),
       );
 
       await callback("Bash", {}, mockOptions);
       expect(mockClient.check).toHaveBeenCalledWith(
-        expect.objectContaining({ action: "execute" }),
+        expect.objectContaining({ action: { name: "execute" } }),
       );
     });
   });

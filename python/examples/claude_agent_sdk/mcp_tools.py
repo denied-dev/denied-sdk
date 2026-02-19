@@ -18,7 +18,7 @@ How it works:
 7. Claude proceeds or receives denial
 
 Policy Rules (in Denied):
-- Allow: principal.role='user' AND resource.scope='user' AND action='read'
+- Allow: subject.properties.role='user' AND resource.properties.scope='user' AND action.name='read'
 
 Setup:
 1. Install: pip install denied-sdk[claude-sdk]
@@ -123,12 +123,12 @@ async def run_scenario(
 
     # Permission callback intercepts ALL tool calls including our custom MCP tools
     # Tool names will be like: mcp__projects__read_project, mcp__projects__delete_project
-    # Pass principal_attributes with role and resource_attributes with scope for policy matching
+    # Pass subject_properties with role and resource_properties with scope for policy matching
     permission_callback = create_denied_permission_callback(
         config=config,
         user_id=user_id,
-        principal_attributes={"role": role},
-        resource_attributes={"scope": scope},
+        subject_properties={"role": role},
+        resource_properties={"scope": scope},
     )
 
     # IMPORTANT: Do NOT use allowed_tools here!

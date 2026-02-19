@@ -47,7 +47,7 @@ User Request → Agent → AuthorizationPlugin.before_tool_callback()
 
 The plugin extracts context and sends to Denied:
 
-- **Principal**: `user_id`, `agent_name`, `session_id`, `role` (from session state)
+- **Subject**: `user_id`, `agent_name`, `session_id`, `role` (from session state)
 - **Resource**: `tool_name`, `tool_description`, `tool_input_schema`, tool args, `scope` (from session state)
 - **Action**: Inferred from tool name (`list_*` → read, `create_*` → create, etc.)
 
@@ -74,9 +74,9 @@ Create this policy in your Denied dashboard:
 ```rego
 # Allow users to read user-scoped resources
 allow {
-    input.principal.attributes.role == "user"
-    input.resource.attributes.scope == "user"
-    input.action == "read"
+    input.subject.properties.role == "user"
+    input.resource.properties.scope == "user"
+    input.action.name == "read"
 }
 ```
 
@@ -113,14 +113,14 @@ Customize what's sent to Denied:
 
 ```python
 config = AuthorizationConfig(
-    include_user_id=True,      # Principal attribute
-    include_agent_name=True,   # Principal attribute
-    include_session_id=True,   # Principal attribute
-    extract_tool_args=True,    # Resource attributes (file_path, resource_id, etc.)
+    include_user_id=True,      # Subject property
+    include_agent_name=True,   # Subject property
+    include_session_id=True,   # Subject property
+    extract_tool_args=True,    # Resource properties (file_path, resource_id, etc.)
 )
 ```
 
-The plugin automatically extracts the **tool input schema** for all tools (both MCP tools and FunctionTools) and sends it as `tool_input_schema` in resource attributes. This allows you to write policies based on the structure and types of tool parameters.
+The plugin automatically extracts the **tool input schema** for all tools (both MCP tools and FunctionTools) and sends it as `tool_input_schema` in resource properties. This allows you to write policies based on the structure and types of tool parameters.
 
 ## Fail Modes
 

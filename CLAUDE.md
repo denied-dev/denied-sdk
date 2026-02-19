@@ -9,7 +9,7 @@ This is a monorepo containing SDK implementations for the Denied authorization p
 - **Python SDK** (`/python`): Python 3.10+ client using httpx and Pydantic
 - **TypeScript SDK** (`/typescript`): TypeScript/JavaScript client using axios
 
-Both SDKs provide identical functionality for interacting with a Denied authorization server to check permissions for principals performing actions on resources.
+Both SDKs provide identical functionality for interacting with a Denied authorization server following the Authzen Authorization API 1.0 specification to check permissions for subjects performing actions on resources.
 
 ## Commands
 
@@ -106,11 +106,11 @@ pre-commit run --all-files
 
 ### Core Concepts
 
-Both SDKs implement the same authorization check pattern:
+Both SDKs implement the Authzen Authorization API 1.0 specification:
 
-1. **Entities**: Principals (users, services) and Resources (documents, APIs)
-2. **Checks**: Authorization requests that ask "Can this principal perform this action on this resource?"
-3. **Responses**: Boolean `allowed` flag with optional `reason` string
+1. **Entities**: Subjects (users, services) and Resources (documents, APIs) identified by `type` and `id`
+2. **Checks**: Authorization requests that ask "Can this subject perform this action on this resource?"
+3. **Responses**: Boolean `decision` with optional nested `context` containing `reason` and `rules`
 
 ### Client Design
 
@@ -140,47 +140,95 @@ Both SDKs support configuration via:
 
 ### Schema Architecture
 
-The schema implementations use different validation approaches but represent the same concepts:
+The schema implementations follow the Authzen Authorization API 1.0 specification:
 
 **Python** (`python/src/denied_sdk/schemas/check.py`):
 
 - Pydantic models with runtime validation
-- `EntityCheck` base class with `@model_validator` ensuring either `uri` or `attributes` is provided
-- `PrincipalCheck` and `ResourceCheck` inherit from `EntityCheck` with literal type discrimination
-- `CheckRequest` bundles principal, resource, and action
-- `CheckResponse` contains `allowed`, optional `reason`, and optional `rules` list
+- `SubjectOrResourceBase` with mandatory `type`, `id`, and optional `properties` fields
+- `Subject` and `Resource` extend `SubjectOrResourceBase`
+- `Action` object with `name` and optional `properties`
+- `CheckRequest` bundles subject, action, resource, and optional context
+- `CheckRequest` uses `@field_validator` to coerce `SubjectLike`/`ActionLike`/`ResourceLike` union inputs to typed objects automatically
+- `CheckResponse` contains `decision` boolean and optional nested `context` with `reason` and `rules`
+- `SubjectLike = Subject | dict | str`, `ResourceLike = Resource | dict | str`, `ActionLike = Action | dict | str`
 
 **TypeScript** (`typescript/src/schemas.ts`):
 
 - TypeScript interfaces (compile-time types only)
-- `EntityCheck` base interface
-- `PrincipalCheck` and `ResourceCheck` extend with discriminated union on `type`
-- `CheckRequest` and `CheckResponse` mirror Python structure (note: TypeScript version lacks `rules` field)
+- `SubjectOrResource` base interface with mandatory `type`, `id`, and optional `properties`
+- `Subject` and `Resource` extend `SubjectOrResource`
+- `Action` interface with `name` and optional `properties`
+- `CheckRequest` and `CheckResponse` mirror Python structure with full Authzen compatibility
+- `SubjectLike = Subject | string`, `ResourceLike = Resource | string`, `ActionLike = Action | string`
 
-### Entity Types
+### Entity Structure
 
-Both SDKs define an `EntityType` enum:
+Following Authzen specification, all entities require:
 
-- `Principal` (or `principal`): Represents users, services, or other actors
-- `Resource` (or `resource`): Represents documents, APIs, or other protected resources
-
-Python uses string-valued enum, TypeScript uses string literals.
+- **`type`** (required): String identifier for the entity type (e.g., "user", "document", "api")
+- **`id`** (required): Unique identifier scoped to the type (e.g., "alice", "doc-123")
+- **`properties`** (optional): Additional properties as key-value pairs
 
 ### API Methods
 
-Both clients expose two methods:
+Both clients expose two methods following Authzen specification:
 
 1. **`check()`**: Single authorization check
    - Sends POST to `/pdp/check` endpoint
-   - Accepts optional `principal_uri`/`principalUri` and `resource_uri`/`resourceUri`
-   - Accepts optional `principal_attributes`/`principalAttributes` and `resource_attributes`/`resourceAttributes`
-   - Default action is `"access"`
-   - Returns `CheckResponse`
+   - Signature (Python): `check(subject, action, resource, context=None)`
+   - Signature (TypeScript): `check({ subject, action, resource, context? })`
+   - **`subject`** and **`resource`**: Accept a typed object, a dict (Python only), or a `"type://id"` URI string
+   - **`action`**: Accepts a typed object, a dict (Python only), or a plain string action name
+   - All three are **required**; `context` is optional
+   - Returns `CheckResponse` with `decision` and optional `context`
 
 2. **`bulk_check()`/`bulkCheck()`**: Multiple checks in one request
    - Sends POST to `/pdp/check/bulk` endpoint
-   - Accepts array of `CheckRequest` objects
+   - Accepts array of `CheckRequest` objects (each with Subject, Action, and Resource)
    - Returns array of `CheckResponse` objects
+
+**Example (Python)**:
+
+```python
+# URI string shorthand
+response = client.check(
+    subject="user://alice",
+    action="read",
+    resource="document://123",
+)
+
+# Typed objects with properties
+response = client.check(
+    subject=Subject(type="user", id="alice", properties={"role": "admin"}),
+    action=Action(name="read"),
+    resource=Resource(type="document", id="123"),
+    context={"ip": "192.168.1.1"},
+)
+print(response.decision)  # True or False
+print(response.context.reason)  # Optional reason
+```
+
+**Example (TypeScript)**:
+
+```typescript
+// URI string shorthand
+const response = await client.check({
+  subject: "user://alice",
+  action: "read",
+  resource: "document://123",
+});
+
+// Typed objects with properties
+const response = await client.check({
+  subject: { type: "user", id: "alice", properties: { role: "admin" } },
+  action: { name: "read" },
+  resource: { type: "document", id: "123" },
+  context: { ip: "192.168.1.1" },
+});
+console.log(response.decision); // true or false
+console.log(response.context?.reason); // Optional reason
+```
 
 ### Key Implementation Details
 
@@ -191,11 +239,14 @@ Both clients expose two methods:
 - Uses `model_dump()` to serialize Pydantic models to JSON
 - Uses `model_validate()` to deserialize JSON to Pydantic models
 - Headers built dynamically to include optional API key
+- `CheckRequest` uses `@field_validator` with `mode="before"` to coerce `SubjectLike`, `ActionLike`, and `ResourceLike` inputs before Pydantic validation
+- Invalid `"type://id"` strings raise `ValueError` (wrapped in Pydantic `ValidationError`)
 
 **TypeScript-specific**:
 
 - Axios error handling wraps errors with HTTP status and response data
-- Uses object spread to construct requests inline
+- `DeniedClient` has private static `coerceSubject`, `coerceResource`, `coerceAction` methods for input coercion
+- Invalid `"type://id"` strings throw `Error` synchronously before the HTTP call
 - Exports both types and runtime values from `index.ts`
 - CommonJS module format (`type: "commonjs"` in package.json)
 - Builds to `./dist` directory with type declarations
@@ -208,11 +259,9 @@ denied-sdk/
 ├── python/
 │   ├── src/denied_sdk/
 │   │   ├── __init__.py          # Public API exports
-│   │   ├── client.py            # DeniedClient implementation
-│   │   ├── enums/
-│   │   │   └── entity.py        # EntityType enum
+│   │   ├── client.py            # DeniedClient, AsyncDeniedClient
 │   │   └── schemas/
-│   │       └── check.py         # Pydantic models
+│   │       └── check.py         # Authzen-compliant Pydantic models
 │   ├── examples/
 │   │   └── example_usage.py
 │   └── pyproject.toml           # Python package config
@@ -221,8 +270,7 @@ denied-sdk/
     ├── src/
     │   ├── index.ts             # Public API exports
     │   ├── client.ts            # DeniedClient implementation
-    │   ├── enums.ts             # EntityType enum
-    │   └── schemas.ts           # TypeScript interfaces
+    │   └── schemas.ts           # Authzen-compliant TypeScript interfaces
     ├── examples/
     │   └── example-usage.ts
     ├── package.json             # NPM package config

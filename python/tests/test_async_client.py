@@ -3,102 +3,124 @@
 import pytest
 
 from denied_sdk import AsyncDeniedClient
-from denied_sdk.schemas.check import CheckResponse
+from denied_sdk.schemas.check import (
+    Action,
+    CheckRequest,
+    CheckResponse,
+    Resource,
+    Subject,
+)
 
 
 @pytest.mark.asyncio
 async def test_async_client_check(httpx_mock):
-    """Test async check method."""
-    # Mock the Denied API response
+    """Test async check method with URI string inputs."""
     httpx_mock.add_response(
         method="POST",
         url="http://localhost:8421/pdp/check",
-        json={"allowed": True, "reason": None, "rules": []},
+        json={"decision": True, "context": {"reason": None, "rules": []}},
     )
 
     async with AsyncDeniedClient(url="http://localhost:8421") as client:
         response = await client.check(
-            principal_uri="user:alice",
-            resource_uri="tool:write_file",
+            subject="user://alice",
+            resource="tool://write_file",
             action="execute",
         )
 
         assert isinstance(response, CheckResponse)
-        assert response.allowed is True
+        assert response.decision is True
 
 
 @pytest.mark.asyncio
 async def test_async_client_check_denied(httpx_mock):
-    """Test async check with denial."""
+    """Test async check with denial using URI strings."""
     httpx_mock.add_response(
         method="POST",
         url="https://api.denied.dev/pdp/check",
-        json={"allowed": False, "reason": "Insufficient permissions", "rules": []},
+        json={
+            "decision": False,
+            "context": {"reason": "Insufficient permissions", "rules": []},
+        },
     )
 
     async with AsyncDeniedClient() as client:
         response = await client.check(
-            principal_uri="user:bob",
-            resource_uri="tool:delete_database",
+            subject="user://bob",
+            resource="tool://delete_database",
             action="execute",
         )
 
-        assert response.allowed is False
-        assert response.reason == "Insufficient permissions"
+        assert response.decision is False
+        assert response.context.reason == "Insufficient permissions"
 
 
 @pytest.mark.asyncio
-async def test_async_client_with_attributes(httpx_mock):
-    """Test async check with attributes."""
+async def test_async_client_with_objects(httpx_mock):
+    """Test async check with typed objects including properties."""
     httpx_mock.add_response(
         method="POST",
         url="https://api.denied.dev/pdp/check",
-        json={"allowed": True, "reason": None, "rules": []},
+        json={"decision": True, "context": {"reason": None, "rules": []}},
     )
 
     async with AsyncDeniedClient() as client:
         response = await client.check(
-            principal_attributes={"role": "admin", "department": "engineering"},
-            resource_attributes={"tool_name": "write_file", "file_path": "/etc/passwd"},
+            subject=Subject(
+                type="user",
+                id="admin",
+                properties={"role": "admin", "department": "engineering"},
+            ),
+            resource=Resource(
+                type="tool", id="write_file", properties={"file_path": "/etc/passwd"}
+            ),
             action="write",
         )
 
-        assert response.allowed is True
+        assert response.decision is True
+
+
+@pytest.mark.asyncio
+async def test_async_client_with_dicts(httpx_mock):
+    """Test async check with dict inputs."""
+    httpx_mock.add_response(
+        method="POST",
+        url="https://api.denied.dev/pdp/check",
+        json={"decision": True},
+    )
+
+    async with AsyncDeniedClient() as client:
+        response = await client.check(
+            subject={"type": "user", "id": "alice", "properties": {"role": "admin"}},
+            resource={"type": "document", "id": "1"},
+            action={"name": "read"},
+        )
+
+        assert response.decision is True
 
 
 @pytest.mark.asyncio
 async def test_async_client_bulk_check(httpx_mock):
     """Test async bulk_check method."""
-    from denied_sdk.enums.entity import EntityType
-    from denied_sdk.schemas.check import CheckRequest, PrincipalCheck, ResourceCheck
-
     httpx_mock.add_response(
         method="POST",
         url="https://api.denied.dev/pdp/check/bulk",
         json=[
-            {"allowed": True, "reason": None, "rules": []},
-            {"allowed": False, "reason": "Access denied", "rules": []},
+            {"decision": True, "context": {"reason": None, "rules": []}},
+            {"decision": False, "context": {"reason": "Access denied", "rules": []}},
         ],
     )
 
     requests = [
         CheckRequest(
-            principal=PrincipalCheck(
-                type=EntityType.principal, uri="user:alice", attributes={}
-            ),
-            resource=ResourceCheck(
-                type=EntityType.resource, uri="tool:read_file", attributes={}
-            ),
-            action="execute",
+            subject=Subject(type="user", id="alice", properties={}),
+            resource=Resource(type="tool", id="read_file", properties={}),
+            action=Action(name="execute"),
         ),
         CheckRequest(
-            principal=PrincipalCheck(
-                type=EntityType.principal, uri="user:bob", attributes={}
-            ),
-            resource=ResourceCheck(
-                type=EntityType.resource, uri="tool:write_file", attributes={}
-            ),
-            action="execute",
+            subject=Subject(type="user", id="bob", properties={}),
+            resource=Resource(type="tool", id="write_file", properties={}),
+            action=Action(name="execute"),
         ),
     ]
 
@@ -106,8 +128,8 @@ async def test_async_client_bulk_check(httpx_mock):
         responses = await client.bulk_check(requests)
 
         assert len(responses) == 2
-        assert responses[0].allowed is True
-        assert responses[1].allowed is False
+        assert responses[0].decision is True
+        assert responses[1].decision is False
 
 
 @pytest.mark.asyncio
@@ -118,5 +140,4 @@ async def test_async_client_context_manager():
     async with client:
         assert client.client is not None
 
-    # Client should be closed after exiting context
     assert client.client.is_closed

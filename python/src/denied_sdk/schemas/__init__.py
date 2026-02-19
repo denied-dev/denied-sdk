@@ -1,17 +1,25 @@
 """Schema definitions for the Denied SDK."""
 
 from .check import (
+    Action,
+    ActionLike,
     CheckRequest,
     CheckResponse,
-    EntityCheck,
-    PrincipalCheck,
-    ResourceCheck,
+    CheckResponseContext,
+    Resource,
+    ResourceLike,
+    Subject,
+    SubjectLike,
 )
 
 __all__ = [
     "CheckRequest",
     "CheckResponse",
-    "EntityCheck",
-    "PrincipalCheck",
-    "ResourceCheck",
+    "CheckResponseContext",
+    "Subject",
+    "SubjectLike",
+    "Resource",
+    "ResourceLike",
+    "Action",
+    "ActionLike",
 ]

@@ -1,6 +1,13 @@
 import axios, { AxiosInstance, AxiosResponse } from "axios";
-import { EntityType } from "./enums";
-import type { CheckRequest, CheckResponse } from "./schemas";
+import type {
+  ActionLike,
+  CheckRequest,
+  CheckResponse,
+  Resource,
+  ResourceLike,
+  Subject,
+  SubjectLike,
+} from "./schemas";
 
 /**
  * Options for configuring the DeniedClient
@@ -51,36 +58,52 @@ export class DeniedClient {
     return response.data;
   }
 
+  private static coerceSubject(value: SubjectLike): Subject {
+    if (typeof value !== "string") return value;
+    if (!value.includes("://")) {
+      throw new Error(`Invalid subject string '${value}': expected format 'type://id'`);
+    }
+    const idx = value.indexOf("://");
+    return { type: value.slice(0, idx), id: value.slice(idx + 3) };
+  }
+
+  private static coerceResource(value: ResourceLike): Resource {
+    if (typeof value !== "string") return value;
+    if (!value.includes("://")) {
+      throw new Error(
+        `Invalid resource string '${value}': expected format 'type://id'`,
+      );
+    }
+    const idx = value.indexOf("://");
+    return { type: value.slice(0, idx), id: value.slice(idx + 3) };
+  }
+
+  private static coerceAction(value: ActionLike): CheckRequest["action"] {
+    if (typeof value !== "string") return value;
+    return { name: value };
+  }
+
   /**
-   * Check whether a principal has permissions to perform an action on a specific resource.
+   * Check whether a subject has permissions to perform an action on a specific resource.
    *
    * @param options - Options for the check request
-   * @param options.principalUri - The identifier of the principal (optional)
-   * @param options.resourceUri - The identifier of the resource (optional)
-   * @param options.principalAttributes - The attributes of the principal (optional)
-   * @param options.resourceAttributes - The attributes of the resource (optional)
-   * @param options.action - The action to check permissions for (optional, defaults to "access")
+   * @param options.subject - The subject performing the action (Subject object or "type://id" string)
+   * @param options.action - The action to check (Action object or action name string)
+   * @param options.resource - The resource being acted on (Resource object or "type://id" string)
+   * @param options.context - Additional context for the authorization check (optional)
    * @returns A promise that resolves to the check response
    */
   async check(options: {
-    principalUri?: string;
-    resourceUri?: string;
-    principalAttributes?: Record<string, unknown>;
-    resourceAttributes?: Record<string, unknown>;
-    action?: string;
+    subject: SubjectLike;
+    action: ActionLike;
+    resource: ResourceLike;
+    context?: Record<string, unknown>;
   }): Promise<CheckResponse> {
     const request: CheckRequest = {
-      principal: {
-        uri: options.principalUri,
-        attributes: options.principalAttributes || {},
-        type: EntityType.Principal,
-      },
-      resource: {
-        uri: options.resourceUri,
-        attributes: options.resourceAttributes || {},
-        type: EntityType.Resource,
-      },
-      action: options.action || "access",
+      subject: DeniedClient.coerceSubject(options.subject),
+      action: DeniedClient.coerceAction(options.action),
+      resource: DeniedClient.coerceResource(options.resource),
+      context: options.context,
     };
 
     try {

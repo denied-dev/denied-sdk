@@ -1,8 +1,7 @@
 from typing import Any
 
-from denied_sdk.enums.entity import EntityType
 from denied_sdk.integrations.shared import extract_action
-from denied_sdk.schemas.check import CheckRequest, PrincipalCheck, ResourceCheck
+from denied_sdk.schemas.check import Action, CheckRequest, Resource, Subject
 
 from .config import AuthorizationConfig
 
@@ -15,9 +14,9 @@ class ContextMapper:
 
     Args:
         config: Authorization configuration controlling what context to extract.
-        principal_attributes: Custom attributes to include in the principal
+        subject_properties: Custom properties to include in the subject
             (e.g., {"role": "admin"}).
-        resource_attributes: Custom attributes to include in the resource
+        resource_properties: Custom properties to include in the resource
             (e.g., {"scope": "user"}).
 
     Example:
@@ -28,53 +27,50 @@ class ContextMapper:
     def __init__(
         self,
         config: AuthorizationConfig,
-        principal_attributes: dict[str, Any] | None = None,
-        resource_attributes: dict[str, Any] | None = None,
+        subject_properties: dict[str, Any] | None = None,
+        resource_properties: dict[str, Any] | None = None,
     ):
         """Initialize the context mapper.
 
         Args:
             config: Configuration controlling context extraction.
-            principal_attributes: Custom attributes to include in the principal.
-            resource_attributes: Custom attributes to include in the resource.
+            subject_properties: Custom properties to include in the subject.
+            resource_properties: Custom properties to include in the resource.
         """
         self.config = config
-        self.principal_attributes = principal_attributes or {}
-        self.resource_attributes = resource_attributes or {}
+        self.subject_properties = subject_properties or {}
+        self.resource_properties = resource_properties or {}
 
-    def extract_principal(self) -> PrincipalCheck:
-        """Extract principal information from configuration.
+    def extract_subject(self) -> Subject:
+        """Extract subject information from configuration.
 
         Since Claude Agent SDK's can_use_tool callback doesn't provide user context
-        directly, principal information is captured at callback creation time via
+        directly, subject information is captured at callback creation time via
         the factory pattern.
 
         Returns:
-            PrincipalCheck with URI and attributes for the principal.
+            Subject with type, id, and properties for the subject.
         """
-        # Start with custom principal attributes (e.g., role, scope)
-        attributes: dict[str, Any] = dict(self.principal_attributes)
+        # Start with custom subject properties (e.g., role, scope)
+        properties: dict[str, Any] = dict(self.subject_properties)
 
         # Add user_id and session_id if provided
         if self.config.user_id:
-            attributes["user_id"] = self.config.user_id
+            properties["user_id"] = self.config.user_id
 
         if self.config.session_id:
-            attributes["session_id"] = self.config.session_id
+            properties["session_id"] = self.config.session_id
 
-        # Build principal URI
-        principal_id = self.config.user_id or "claude-agent"
-        principal_uri = f"user:{principal_id}"
+        # Build subject id
+        subject_id = self.config.user_id or "claude-agent"
 
-        return PrincipalCheck(
-            type=EntityType.principal,
-            uri=principal_uri,
-            attributes=attributes if attributes else None,
+        return Subject(
+            type="user",
+            id=subject_id,
+            properties=properties if properties else {},
         )
 
-    def extract_resource(
-        self, tool_name: str, tool_input: dict[str, Any]
-    ) -> ResourceCheck:
+    def extract_resource(self, tool_name: str, tool_input: dict[str, Any]) -> Resource:
         """Extract resource information from tool and arguments.
 
         Args:
@@ -82,25 +78,22 @@ class ContextMapper:
             tool_input: Arguments passed to the tool.
 
         Returns:
-            ResourceCheck with URI and attributes for the resource.
+            Resource with type, id, and properties for the resource.
         """
-        # Start with custom resource attributes (e.g., scope)
-        attributes: dict[str, Any] = dict(self.resource_attributes)
+        # Start with custom resource properties (e.g., scope)
+        properties: dict[str, Any] = dict(self.resource_properties)
 
         # Add tool name
-        attributes["tool_name"] = tool_name
+        properties["tool_name"] = tool_name
 
         # Add tool input if configured (aligned with ADK structure)
         if self.config.extract_tool_args and tool_input:
-            attributes["tool_input"] = {"values": tool_input}
+            properties["tool_input"] = {"values": tool_input}
 
-        # Build resource URI
-        resource_uri = f"tool:{tool_name}"
-
-        return ResourceCheck(
-            type=EntityType.resource,
-            uri=resource_uri,
-            attributes=attributes,
+        return Resource(
+            type="tool",
+            id=tool_name,
+            properties=properties,
         )
 
     def create_check_request(
@@ -117,13 +110,14 @@ class ContextMapper:
         Returns:
             CheckRequest ready to send to Denied service.
         """
-        principal = self.extract_principal()
+        subject = self.extract_subject()
         resource = self.extract_resource(tool_name, tool_input)
         # Pass tool_input for Bash command analysis
-        action = extract_action(tool_name, tool_input)
+        action_name = extract_action(tool_name, tool_input)
+        action = Action(name=action_name)
 
         return CheckRequest(
-            principal=principal,
-            resource=resource,
+            subject=subject,
             action=action,
+            resource=resource,
         )

@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from denied_sdk import AsyncDeniedClient
+from denied_sdk import AsyncDeniedClient, CheckResponseContext
 from denied_sdk.integrations.google_adk.config import AuthorizationConfig
 from denied_sdk.integrations.google_adk.plugin import AuthorizationPlugin
 from denied_sdk.schemas.check import CheckResponse
@@ -55,7 +55,9 @@ async def test_plugin_allows_authorized_call(
     config, mock_client, mock_tool, mock_tool_context
 ):
     """Test plugin allows execution when authorized."""
-    mock_client.check.return_value = CheckResponse(allowed=True, reason=None, rules=[])
+    mock_client.check.return_value = CheckResponse(
+        decision=True, context=CheckResponseContext(reason=None, rules=[])
+    )
 
     plugin = AuthorizationPlugin(config=config, denied_client=mock_client)
 
@@ -75,9 +77,10 @@ async def test_plugin_denies_unauthorized_call(
 ):
     """Test plugin blocks execution when denied."""
     mock_client.check.return_value = CheckResponse(
-        allowed=False,
-        reason="Insufficient permissions",
-        rules=["policy-123"],
+        decision=False,
+        context=CheckResponseContext(
+            reason="Insufficient permissions", rules=["policy-123"]
+        ),
     )
 
     plugin = AuthorizationPlugin(config=config, denied_client=mock_client)
@@ -138,7 +141,9 @@ async def test_plugin_retry_logic(config, mock_client, mock_tool, mock_tool_cont
     mock_client.check.side_effect = [
         Exception("Timeout"),
         Exception("Timeout"),
-        CheckResponse(allowed=True, reason=None, rules=[]),
+        CheckResponse(
+            decision=True, context=CheckResponseContext(reason=None, rules=[])
+        ),
     ]
 
     config.retry_attempts = 2  # Will try 3 times total (initial + 2 retries)

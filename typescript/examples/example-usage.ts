@@ -1,5 +1,5 @@
 /* eslint-disable no-console */
-import { CheckRequest, DeniedClient, EntityType } from "denied-sdk";
+import { CheckRequest, DeniedClient } from "denied-sdk";
 
 async function run(): Promise<void> {
   const client = new DeniedClient({
@@ -7,61 +7,64 @@ async function run(): Promise<void> {
   });
 
   try {
-    // Example 1: Simple check with attributes
-    console.log("Example 1: Checking permissions with attributes...");
+    // 1.1. Single check / Simple URI string shorthand
+    console.log("Example 1: URI string shorthand...");
     const response1 = await client.check({
-      principalAttributes: { role: "admin" },
-      resourceAttributes: { type: "confidential" },
+      subject: "user://alice",
       action: "read",
+      resource: "document://secret",
     });
-    console.log(`Is allowed: ${response1.allowed}`);
-    if (response1.reason) {
-      console.log(`Reason: ${response1.reason}`);
-    }
+    console.log(`Decision: ${response1.decision}`);
 
-    // Example 2: Check with URIs
-    console.log("\nExample 2: Checking permissions with URIs...");
+    // 1.2. Single check / Typed objects
+    console.log("\nExample 2: Typed objects with properties...");
     const response2 = await client.check({
-      principalUri: "user:john.doe",
-      resourceUri: "document:project-plan",
-      action: "write",
+      subject: { type: "user", id: "admin", properties: { role: "admin" } },
+      action: { name: "read" },
+      resource: {
+        type: "document",
+        id: "confidential-doc",
+        properties: { classification: "confidential" },
+      },
     });
-    console.log(`Is allowed: ${response2.allowed}`);
+    console.log(`Decision: ${response2.decision}`);
 
-    // Example 3: Bulk check
-    console.log("\nExample 3: Performing bulk check...");
+    // 1.3. Single check / Mixed strings and objects with optional context
+    console.log("\nExample 3: Mixed with context...");
+    const response3 = await client.check({
+      subject: "user://alice",
+      action: "execute",
+      resource: "api://payment-service",
+      context: { ip: "192.168.1.1", timestamp: Date.now() },
+    });
+    console.log(`Decision: ${response3.decision}`);
+
+    // 2. Multiple bulk checks
+    console.log("\nExample 4: Performing bulk check...");
     const requests: CheckRequest[] = [
       {
-        principal: {
-          uri: "user:alice",
-          attributes: { role: "editor" },
-          type: EntityType.Principal,
-        },
+        subject: { type: "user", id: "alice", properties: { role: "editor" } },
+        action: { name: "read" },
         resource: {
-          uri: "document:report",
-          attributes: { classification: "public" },
-          type: EntityType.Resource,
+          type: "document",
+          id: "report",
+          properties: { classification: "public" },
         },
-        action: "read",
       },
       {
-        principal: {
-          uri: "user:bob",
-          attributes: { role: "viewer" },
-          type: EntityType.Principal,
-        },
+        subject: { type: "user", id: "bob", properties: { role: "viewer" } },
+        action: { name: "write" },
         resource: {
-          uri: "document:report",
-          attributes: { classification: "confidential" },
-          type: EntityType.Resource,
+          type: "document",
+          id: "report",
+          properties: { classification: "confidential" },
         },
-        action: "write",
       },
     ];
 
     const bulkResponses = await client.bulkCheck(requests);
     bulkResponses.forEach((response, index) => {
-      console.log(`Check ${index + 1}: ${response.allowed}`);
+      console.log(`Check ${index + 1}: ${response.decision}`);
     });
   } catch (error) {
     console.error("Error:", error);

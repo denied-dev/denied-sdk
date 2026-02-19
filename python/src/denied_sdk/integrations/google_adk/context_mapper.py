@@ -1,9 +1,8 @@
 import inspect
 from typing import TYPE_CHECKING, Any
 
-from denied_sdk.enums.entity import EntityType
 from denied_sdk.integrations.shared import extract_action
-from denied_sdk.schemas.check import CheckRequest, PrincipalCheck, ResourceCheck
+from denied_sdk.schemas.check import Action, CheckRequest, Resource, Subject
 
 from .config import AuthorizationConfig
 
@@ -34,37 +33,34 @@ class ContextMapper:
         """
         self.config = config
 
-    def extract_principal(self, tool_context: "ToolContext") -> PrincipalCheck:
-        """Extract principal information from ADK tool context.
+    def extract_subject(self, tool_context: "ToolContext") -> Subject:
+        """Extract subject information from ADK tool context.
 
         Args:
             tool_context: The ADK tool execution context.
 
         Returns:
-            PrincipalCheck with URI and attributes for the principal.
+            Subject with type, id, and properties for the subject.
         """
-        attributes: dict[str, Any] = {}
+        properties: dict[str, Any] = {}
 
         # Always include context identifiers
-        attributes["user_id"] = tool_context.user_id
-        attributes["agent_name"] = tool_context.agent_name
-        attributes["session_id"] = tool_context.session.id
-        attributes["invocation_id"] = tool_context.invocation_id
+        properties["user_id"] = tool_context.user_id
+        properties["agent_name"] = tool_context.agent_name
+        properties["session_id"] = tool_context.session.id
+        properties["invocation_id"] = tool_context.invocation_id
 
-        # Extract configured state keys into principal attributes
-        if self.config.principal_state_keys:
+        # Extract configured state keys into subject properties
+        if self.config.subject_state_keys:
             state = tool_context.state.to_dict()
-            for key in self.config.principal_state_keys:
+            for key in self.config.subject_state_keys:
                 if key in state:
-                    attributes[key] = state[key]
+                    properties[key] = state[key]
 
-        # Build principal URI
-        principal_uri = f"user:{tool_context.user_id}"
-
-        return PrincipalCheck(
-            type=EntityType.principal,
-            uri=principal_uri,
-            attributes=attributes,
+        return Subject(
+            type="user",
+            id=tool_context.user_id,
+            properties=properties,
         )
 
     def _extract_input_schema(self, tool: "BaseTool") -> dict[str, Any] | None:
@@ -119,7 +115,7 @@ class ContextMapper:
 
     def extract_resource(
         self, tool: "BaseTool", tool_args: dict[str, Any], tool_context: "ToolContext"
-    ) -> ResourceCheck:
+    ) -> Resource:
         """Extract resource information from tool and arguments.
 
         Args:
@@ -128,15 +124,15 @@ class ContextMapper:
             tool_context: The ADK tool execution context.
 
         Returns:
-            ResourceCheck with URI and attributes for the resource.
+            Resource with type, id, and properties for the resource.
         """
-        attributes: dict[str, Any] = {
+        properties: dict[str, Any] = {
             "tool_name": tool.name,
         }
 
         # Add tool description if available
         if hasattr(tool, "description") and tool.description:
-            attributes["tool_description"] = tool.description
+            properties["tool_description"] = tool.description
 
         # Add tool input (schema and values) if configured
         if self.config.extract_tool_args:
@@ -150,26 +146,23 @@ class ContextMapper:
                 tool_input["values"] = tool_args
 
             if tool_input:
-                attributes["tool_input"] = tool_input
+                properties["tool_input"] = tool_input
 
         # Add tool metadata if available
         if hasattr(tool, "custom_metadata") and tool.custom_metadata:
-            attributes.update(tool.custom_metadata)
+            properties.update(tool.custom_metadata)
 
-        # Extract configured state keys into resource attributes
+        # Extract configured state keys into resource properties
         if self.config.resource_state_keys:
             state = tool_context.state.to_dict()
             for key in self.config.resource_state_keys:
                 if key in state:
-                    attributes[key] = state[key]
+                    properties[key] = state[key]
 
-        # Build resource URI
-        resource_uri = f"tool:{tool.name}"
-
-        return ResourceCheck(
-            type=EntityType.resource,
-            uri=resource_uri,
-            attributes=attributes,
+        return Resource(
+            type="tool",
+            id=tool.name,
+            properties=properties,
         )
 
     def create_check_request(
@@ -188,13 +181,14 @@ class ContextMapper:
         Returns:
             CheckRequest ready to send to Denied service.
         """
-        principal = self.extract_principal(tool_context)
+        subject = self.extract_subject(tool_context)
         resource = self.extract_resource(tool, tool_args, tool_context)
         # Pass tool_args for Bash command analysis
-        action = extract_action(tool.name, tool_args)
+        action_name = extract_action(tool.name, tool_args)
+        action = Action(name=action_name)
 
         return CheckRequest(
-            principal=principal,
-            resource=resource,
+            subject=subject,
             action=action,
+            resource=resource,
         )

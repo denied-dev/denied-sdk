@@ -1,213 +1,121 @@
 # Denied SDK for TypeScript
 
-This package allows you to integrate [Denied](https://github.com/denied-dev/denied-sdk) inside your TypeScript application, providing a client to interact with the Denied authorization server.
+A lightweight TypeScript SDK for the Denied authorization platform.
 
 ## Installation
-
-Install the `denied-sdk` package via pnpm:
-
-```bash
-pnpm add denied-sdk
-```
-
-Or using npm:
 
 ```bash
 npm install denied-sdk
 ```
 
-## Usage
-
-Create an instance of the `DeniedClient` class to interact with the Denied server.
+## Quick Start
 
 ```typescript
 import { DeniedClient } from "denied-sdk";
 
-const client = new DeniedClient({
-  apiKey: "your-api-key-here",
+const client = new DeniedClient({ apiKey: "your-api-key" });
+
+const result = await client.check({
+  subject: "user://alice",
+  action: "read",
+  resource: "document://secret",
 });
+
+console.log(result.decision); // true or false
+console.log(result.context?.reason); // Optional reason string
 ```
 
-### Environment Variables
+## Configuration
 
-You can also configure the client using environment variables:
+|              | Parameter | Environment variable | Default                  |
+| ------------ | --------- | -------------------- | ------------------------ |
+| **Base URL** | `url`     | `DENIED_URL`         | `https://api.denied.dev` |
+| **API Key**  | `apiKey`  | `DENIED_API_KEY`     | -                        |
 
-- `DENIED_URL` - The base URL of the Denied server (default: `https://api.denied.dev`)
-- `DENIED_API_KEY` - Your API key for authentication
-
-If these are set, you can initialize the client without parameters:
-
-```typescript
-const client = new DeniedClient();
-```
-
-For custom or self-hosted instances, you can override the URL:
+Configure the SDK by instancing the `DeniedClient` with the desired parameters.
 
 ```typescript
+// with constructor parameters
 const client = new DeniedClient({
   url: "https://example.denied.dev",
-  apiKey: "your-api-key-here",
+  apiKey: "your-api-key",
 });
-```
 
-### Check Permissions
-
-Check if a principal has permission to perform an action on a resource:
-
-```typescript
-async function checkPermission() {
-  const response = await client.check({
-    principalAttributes: { role: "admin" },
-    resourceAttributes: { type: "confidential" },
-    action: "read",
-  });
-
-  console.log(`Is allowed: ${response.allowed}`);
-  if (response.reason) {
-    console.log(`Reason: ${response.reason}`);
-  }
-}
-```
-
-You can also use URIs to identify principals and resources:
-
-```typescript
-const response = await client.check({
-  principalUri: "user:john.doe",
-  resourceUri: "document:project-plan",
-  action: "write",
-});
-```
-
-### Bulk Check
-
-Perform multiple permission checks in a single request:
-
-```typescript
-import { CheckRequest, EntityType } from "denied-sdk";
-
-async function bulkCheckPermissions() {
-  const requests: CheckRequest[] = [
-    {
-      principal: {
-        uri: "user:alice",
-        attributes: { role: "editor" },
-        type: EntityType.Principal,
-      },
-      resource: {
-        uri: "document:report",
-        attributes: { classification: "public" },
-        type: EntityType.Resource,
-      },
-      action: "read",
-    },
-    {
-      principal: {
-        uri: "user:bob",
-        attributes: { role: "viewer" },
-        type: EntityType.Principal,
-      },
-      resource: {
-        uri: "document:report",
-        attributes: { classification: "confidential" },
-        type: EntityType.Resource,
-      },
-      action: "write",
-    },
-  ];
-
-  const responses = await client.bulkCheck(requests);
-  responses.forEach((response, index) => {
-    console.log(`Check ${index + 1}: Allowed = ${response.allowed}`);
-  });
-}
+// or with environment variables:
+const client = new DeniedClient();
 ```
 
 ## API Reference
 
-### DeniedClient
+### `check()`
 
-#### Constructor
+Check whether a subject has permissions to perform an action on a resource.
 
-```typescript
-new DeniedClient(options?: DeniedClientOptions)
-```
-
-**Options:**
-
-- `url` (string, optional): The base URL of the Denied server. Defaults to `process.env.DENIED_URL` or `"https://api.denied.dev"`
-- `apiKey` (string, optional): The API key for authentication. Defaults to `process.env.DENIED_API_KEY`
-
-#### Methods
-
-##### check()
+**Signature:**
 
 ```typescript
-check(options: CheckOptions): Promise<CheckResponse>
+client.check({ subject, action, resource, context? }): Promise<CheckResponse>
 ```
 
-Check if a principal has permission to perform an action on a resource.
+**Arguments:**
 
-**Parameters:**
+- `subject` — `Subject` object or `"type://id"` string
+- `action` — `Action` object or plain string
+- `resource` — `Resource` object or `"type://id"` string
+- `context` — optional `Record<string, unknown>` of additional context
 
-- `principalUri` (string, optional): URI of the principal
-- `resourceUri` (string, optional): URI of the resource
-- `principalAttributes` (Record<string, string>, optional): Attributes of the principal
-- `resourceAttributes` (Record<string, string>, optional): Attributes of the resource
-- `action` (string, optional): The action to check (defaults to "access")
-
-**Returns:** Promise<CheckResponse>
-
-- `allowed` (boolean): Whether the action is allowed
-- `reason` (string, optional): Reason for the decision
-
-##### bulkCheck()
+**Examples:**
 
 ```typescript
-bulkCheck(requests: CheckRequest[]): Promise<CheckResponse[]>
+// URI string shorthand — simplest
+const result = await client.check({
+  subject: "user://alice",
+  action: "read",
+  resource: "document://123",
+});
+
+// Typed objects
+const result = await client.check({
+  subject: { type: "user", id: "alice", properties: { role: "admin" } },
+  action: { name: "read" },
+  resource: { type: "document", id: "123" },
+  context: { ip: "192.168.1.1" },
+});
 ```
 
-Perform multiple permission checks in a single request.
+### `bulkCheck()`
 
-**Parameters:**
+Perform multiple authorization checks in a single request.
 
-- `requests` (CheckRequest[]): Array of check requests
+**Signature:**
 
-**Returns:** Promise<CheckResponse[]> - Array of check responses
+```typescript
+client.bulkCheck(requests: CheckRequest[]): Promise<CheckResponse[]>
+```
+
+**Examples:**
+
+```typescript
+const results = await client.bulkCheck([
+  {
+    subject: { type: "user", id: "alice" },
+    action: { name: "read" },
+    resource: { type: "document", id: "1" },
+  },
+  {
+    subject: { type: "user", id: "bob" },
+    action: { name: "write" },
+    resource: { type: "document", id: "1" },
+  },
+]);
+```
 
 ## Types
 
-### CheckRequest
-
-```typescript
-interface CheckRequest {
-  principal: PrincipalCheck;
-  resource: ResourceCheck;
-  action: string;
-}
-```
-
-### CheckResponse
-
-```typescript
-interface CheckResponse {
-  allowed: boolean;
-  reason?: string;
-}
-```
-
-### EntityType
-
-```typescript
-enum EntityType {
-  Resource = "resource",
-  Principal = "principal",
-}
-```
-
-## Examples
-
-For more examples, see the [examples](./examples) directory.
+- **`Subject` / `Resource`** — `type: string`, `id: string`, `properties?: Record<string, unknown>`
+- **`Action`** — `name: string`, `properties?: Record<string, unknown>`
+- **`CheckRequest`** — `subject`, `action`, `resource`, `context?: Record<string, unknown>`
+- **`CheckResponse`** — `decision: boolean`, `context?: { reason?: string; rules?: string[] }`
 
 ## License
 
