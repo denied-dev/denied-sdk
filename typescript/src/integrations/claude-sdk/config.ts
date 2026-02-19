@@ -4,7 +4,7 @@
 export interface AuthorizationConfig {
   /**
    * URL of the Denied authorization service.
-   * Defaults to DENIED_URL environment variable or "http://localhost:8421".
+   * Defaults to DENIED_URL environment variable or "https://api.denied.dev".
    */
   deniedUrl?: string;
 
@@ -75,7 +75,7 @@ export function resolveConfig(
   config?: AuthorizationConfig,
 ): ResolvedAuthorizationConfig {
   const deniedUrl =
-    config?.deniedUrl ?? process.env.DENIED_URL ?? "http://localhost:8421";
+    config?.deniedUrl ?? process.env.DENIED_URL ?? "https://api.denied.dev";
 
   const deniedApiKey = config?.deniedApiKey ?? process.env.DENIED_API_KEY;
 

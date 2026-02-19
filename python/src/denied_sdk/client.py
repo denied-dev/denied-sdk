@@ -18,15 +18,15 @@ class BaseDeniedClient:
     ----------
     url : str, optional
         The base URL of the Denied server.
-        Defaults to environment variable "DENIED_URL" or "http://localhost:8421".
+        Defaults to environment variable "DENIED_URL" or "https://api.denied.dev".
     api_key : str, optional
-        The API key for authenticating with the server.
+        The API key for authenticating with the decision node.
         Defaults to environment variable "DENIED_API_KEY" if not provided.
     timeout : float, optional
         Request timeout in seconds. Defaults to 60.0.
     """
 
-    DEFAULT_URL = "http://localhost:8421"
+    DEFAULT_URL = "https://api.denied.dev"
     DEFAULT_TIMEOUT = 60.0
 
     def __init__(
@@ -45,7 +45,7 @@ class BaseDeniedClient:
         """Build HTTP headers for requests."""
         headers: dict[str, str] = {}
         if self._api_key is not None:
-            headers["x-api-key"] = self._api_key
+            headers["X-API-Key"] = self._api_key
         return headers
 
     def _build_check_request(
@@ -121,9 +121,9 @@ class DeniedClient(BaseDeniedClient):
     ----------
     url : str, optional
         The base URL of the Denied server.
-        Defaults to environment variable "DENIED_URL" or "http://localhost:8421".
+        Defaults to environment variable "DENIED_URL" or "https://api.denied.dev".
     api_key : str, optional
-        The API key for authenticating with the server.
+        The API key for authenticating with the decision node.
         Defaults to environment variable "DENIED_API_KEY" if not provided.
     timeout : float, optional
         Request timeout in seconds. Defaults to 60.0.
@@ -200,7 +200,7 @@ class DeniedClient(BaseDeniedClient):
             resource_attributes,
             action,
         )
-        response = self.client.post("/check", json=request.model_dump())
+        response = self.client.post("/pdp/check", json=request.model_dump())
         self._handle_response(response)
         return CheckResponse.model_validate(response.json())
 
@@ -224,7 +224,7 @@ class DeniedClient(BaseDeniedClient):
             If the HTTP request returns an unsuccessful status code.
         """
         response = self.client.post(
-            "/check/bulk",
+            "/pdp/check/bulk",
             json=[request.model_dump() for request in check_requests],
         )
         self._handle_response(response)
@@ -256,9 +256,9 @@ class AsyncDeniedClient(BaseDeniedClient):
     ----------
     url : str, optional
         The base URL of the Denied server.
-        Defaults to environment variable "DENIED_URL" or "http://localhost:8421".
+        Defaults to environment variable "DENIED_URL" or "https://api.denied.dev".
     api_key : str, optional
-        The API key for authenticating with the server.
+        The API key for authenticating with the decision node.
         Defaults to environment variable "DENIED_API_KEY" if not provided.
     timeout : float, optional
         Request timeout in seconds. Defaults to 60.0.
@@ -335,7 +335,7 @@ class AsyncDeniedClient(BaseDeniedClient):
             resource_attributes,
             action,
         )
-        response = await self.client.post("/check", json=request.model_dump())
+        response = await self.client.post("/pdp/check", json=request.model_dump())
         self._handle_response(response)
         return CheckResponse.model_validate(response.json())
 
@@ -361,7 +361,7 @@ class AsyncDeniedClient(BaseDeniedClient):
             If the HTTP request returns an unsuccessful status code.
         """
         response = await self.client.post(
-            "/check/bulk",
+            "/pdp/check/bulk",
             json=[request.model_dump() for request in check_requests],
         )
         self._handle_response(response)

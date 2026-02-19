@@ -14,7 +14,6 @@ Setup:
 2. Set environment variables:
    export GEMINI_API_KEY='your-key'
    export DENIED_API_KEY='your-key'
-   export DENIED_URL='https://app.denied.dev/pdp/123'
 
 3. Run the example:
    python examples/adk_scope_example.py
@@ -153,6 +152,10 @@ if __name__ == "__main__":
     # Check for API keys
     if not os.getenv("GEMINI_API_KEY"):
         print("❌ Error: GEMINI_API_KEY environment variable not set")
+        exit(1)
+
+    if not os.getenv("DENIED_URL") and not os.getenv("DENIED_API_KEY"):
+        print("Neither DENIED_URL nor DENIED_API_KEY is set")
         exit(1)
 
     try:

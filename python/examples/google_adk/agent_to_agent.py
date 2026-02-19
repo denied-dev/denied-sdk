@@ -33,7 +33,6 @@ Setup:
 2. Set env vars:
    export GEMINI_API_KEY='your-key'
    export DENIED_API_KEY='your-key'
-   export DENIED_URL='https://app.denied.dev/pdp/123'
 3. Run: python examples/adk_agent_to_agent.py
 """
 
@@ -191,6 +190,10 @@ if __name__ == "__main__":
 
     if not os.getenv("GEMINI_API_KEY"):
         print("Error: GEMINI_API_KEY not set")
+        exit(1)
+
+    if not os.getenv("DENIED_URL") and not os.getenv("DENIED_API_KEY"):
+        print("Neither DENIED_URL nor DENIED_API_KEY is set")
         exit(1)
 
     asyncio.run(main())

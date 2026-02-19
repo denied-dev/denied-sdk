@@ -20,7 +20,6 @@ Setup:
 
 2. Set environment variables:
    export GEMINI_API_KEY='your-gemini-key'
-   export DENIED_URL='https://app.denied.dev/pdp/123'
    export DENIED_API_KEY='your-denied-api-key'
    export COSPEC_MCP_URL='https://mcp.cospec.ai/mcp?deploymentId=YOUR_DEPLOYMENT_ID'
    export COSPEC_API_KEY='your-cospec-api-key'

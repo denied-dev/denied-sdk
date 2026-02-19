@@ -32,7 +32,6 @@ Setup:
 2. Set env vars:
    export ANTHROPIC_API_KEY='your-key'
    export DENIED_API_KEY='your-key'
-   export DENIED_URL='https://app.denied.dev/pdp/YOUR_PDP_ID'
 3. Run: python examples/claude_agent_sdk/internal_tools.py
 """
 
@@ -140,8 +139,8 @@ if __name__ == "__main__":
         print("ANTHROPIC_API_KEY not set")
         exit(1)
 
-    if not os.getenv("DENIED_URL"):
-        print("DENIED_URL not set")
+    if not os.getenv("DENIED_URL") and not os.getenv("DENIED_API_KEY"):
+        print("Neither DENIED_URL nor DENIED_API_KEY is set")
         exit(1)
 
     try:

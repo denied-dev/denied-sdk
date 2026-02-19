@@ -17,7 +17,7 @@ from denied_sdk.enums.entity import EntityType
 def test_client_initialization_default():
     """Test that DeniedClient can be initialized with default values."""
     client = DeniedClient()
-    assert client._url == "http://localhost:8421"
+    assert client._url == "https://api.denied.dev"
     client.close()
 
 
@@ -113,7 +113,7 @@ def test_check_with_uri_success(httpx_mock):
     """Test successful check with URIs."""
     httpx_mock.add_response(
         method="POST",
-        url="http://localhost:8421/check",
+        url="https://api.denied.dev/pdp/check",
         json={"allowed": True, "reason": "Policy allows"},
     )
     with DeniedClient() as client:
@@ -128,7 +128,7 @@ def test_check_with_attributes_success(httpx_mock):
     """Test successful check with attributes."""
     httpx_mock.add_response(
         method="POST",
-        url="http://localhost:8421/check",
+        url="https://api.denied.dev/pdp/check",
         json={"allowed": False},
     )
     with DeniedClient() as client:
@@ -144,7 +144,7 @@ def test_check_default_action(httpx_mock):
     """Test that default action is 'access'."""
     httpx_mock.add_response(
         method="POST",
-        url="http://localhost:8421/check",
+        url="https://api.denied.dev/pdp/check",
         json={"allowed": True},
     )
     with DeniedClient() as client:
@@ -159,7 +159,7 @@ def test_bulk_check_success(httpx_mock):
     """Test bulk check with multiple requests."""
     httpx_mock.add_response(
         method="POST",
-        url="http://localhost:8421/check/bulk",
+        url="https://api.denied.dev/pdp/check/bulk",
         json=[{"allowed": True}, {"allowed": False, "reason": "Denied"}],
     )
     requests = [
@@ -189,7 +189,7 @@ def test_check_http_404_error(httpx_mock):
     """Test handling of 404 error."""
     httpx_mock.add_response(
         method="POST",
-        url="http://localhost:8421/check",
+        url="https://api.denied.dev/pdp/check",
         status_code=404,
         text="Not found",
     )
@@ -201,7 +201,7 @@ def test_check_http_500_error(httpx_mock):
     """Test handling of 500 error."""
     httpx_mock.add_response(
         method="POST",
-        url="http://localhost:8421/check",
+        url="https://api.denied.dev/pdp/check",
         status_code=500,
         json={"error": "Internal server error"},
     )
@@ -220,7 +220,7 @@ def test_bulk_check_http_error(httpx_mock):
     """Test handling of HTTP error in bulk check."""
     httpx_mock.add_response(
         method="POST",
-        url="http://localhost:8421/check/bulk",
+        url="https://api.denied.dev/pdp/check/bulk",
         status_code=400,
         json={"error": "Bad request"},
     )

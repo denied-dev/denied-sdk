@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import axios from "axios";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DeniedClient } from "./client";
 import { EntityType } from "./enums";
 import type { CheckRequest } from "./schemas";
@@ -18,7 +18,7 @@ describe("DeniedClient Initialization", () => {
     const client = new DeniedClient();
     expect(client).toBeDefined();
     expect(mockedAxios.create).toHaveBeenCalledWith({
-      baseURL: "http://localhost:8421",
+      baseURL: "https://api.denied.dev",
       headers: {},
       timeout: 60000,
     });
@@ -42,7 +42,7 @@ describe("DeniedClient Initialization", () => {
     expect(client).toBeDefined();
     expect(mockedAxios.create).toHaveBeenCalledWith({
       baseURL: "https://api.denied.dev",
-      headers: { "x-api-key": "test-key" },
+      headers: { "X-API-Key": "test-key" },
       timeout: 60000,
     });
   });
@@ -68,7 +68,7 @@ describe("DeniedClient API Methods", () => {
 
     expect(response.allowed).toBe(true);
     expect(response.reason).toBe("Policy allows");
-    expect(mockedAxios.post).toHaveBeenCalledWith("/check", {
+    expect(mockedAxios.post).toHaveBeenCalledWith("/pdp/check", {
       principal: { uri: "user:alice", attributes: {}, type: "principal" },
       resource: { uri: "doc:1", attributes: {}, type: "resource" },
       action: "read",
@@ -88,7 +88,7 @@ describe("DeniedClient API Methods", () => {
     });
 
     expect(response.allowed).toBe(false);
-    expect(mockedAxios.post).toHaveBeenCalledWith("/check", {
+    expect(mockedAxios.post).toHaveBeenCalledWith("/pdp/check", {
       principal: {
         uri: undefined,
         attributes: { role: "guest" },
@@ -115,7 +115,7 @@ describe("DeniedClient API Methods", () => {
     });
 
     expect(mockedAxios.post).toHaveBeenCalledWith(
-      "/check",
+      "/pdp/check",
       expect.objectContaining({ action: "access" }),
     );
   });
@@ -265,8 +265,8 @@ describe("DeniedClient Configuration", () => {
     process.env.DENIED_API_KEY = "env-key-123";
     new DeniedClient();
     expect(mockedAxios.create).toHaveBeenCalledWith({
-      baseURL: "http://localhost:8421",
-      headers: { "x-api-key": "env-key-123" },
+      baseURL: "https://api.denied.dev",
+      headers: { "X-API-Key": "env-key-123" },
       timeout: 60000,
     });
   });
@@ -282,16 +282,16 @@ describe("DeniedClient Configuration", () => {
 
     expect(mockedAxios.create).toHaveBeenCalledWith({
       baseURL: "https://custom.denied.dev",
-      headers: { "x-api-key": "custom-key" },
+      headers: { "X-API-Key": "custom-key" },
       timeout: 60000,
     });
   });
 
-  it("should not include x-api-key header when no API key is provided", () => {
+  it("should not include X-API-Key header when no API key is provided", () => {
     delete process.env.DENIED_API_KEY;
     new DeniedClient();
     expect(mockedAxios.create).toHaveBeenCalledWith({
-      baseURL: "http://localhost:8421",
+      baseURL: "https://api.denied.dev",
       headers: {},
       timeout: 60000,
     });

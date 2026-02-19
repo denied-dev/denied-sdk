@@ -1,7 +1,7 @@
 import os
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class AuthorizationConfig(BaseModel):
@@ -23,7 +23,7 @@ class AuthorizationConfig(BaseModel):
 
     Example:
         config = AuthorizationConfig(
-            denied_url="https://auth.company.com",
+            denied_api_key="your-api-key",
             fail_mode="closed",
             user_id="user-123",
         )
@@ -75,18 +75,9 @@ class AuthorizationConfig(BaseModel):
     def set_env_defaults(cls, values: dict) -> dict:
         """Set defaults from environment variables if not provided."""
         if values.get("denied_url") is None:
-            values["denied_url"] = os.getenv("DENIED_URL", "http://localhost:8421")
+            values["denied_url"] = os.getenv("DENIED_URL", "https://api.denied.dev")
 
         if values.get("denied_api_key") is None:
             values["denied_api_key"] = os.getenv("DENIED_API_KEY")
 
         return values
-
-    @field_validator("denied_url")
-    @classmethod
-    def validate_denied_url(cls, v: str | None) -> str:
-        """Validate that denied_url is provided."""
-        if not v:
-            msg = "denied_url must be provided or DENIED_URL must be set"
-            raise ValueError(msg)
-        return v

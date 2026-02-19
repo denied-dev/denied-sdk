@@ -37,7 +37,7 @@ class AuthorizationPlugin(BasePlugin):
 
         # Custom configuration
         config = AuthorizationConfig(
-            denied_url="https://auth.company.com",
+            denied_api_key="your-api-key",
             fail_mode="closed",
         )
         plugin = AuthorizationPlugin(config)

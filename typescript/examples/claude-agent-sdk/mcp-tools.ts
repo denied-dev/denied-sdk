@@ -26,18 +26,17 @@
  * 2. Set env vars:
  *    export ANTHROPIC_API_KEY='your-key'
  *    export DENIED_API_KEY='your-key'
- *    export DENIED_URL='https://app.denied.dev/pdp/123'
  * 3. Run: npx ts-node examples/claude-agent-sdk/mcp-server-auth.ts
  */
 
-import "dotenv/config";
 import {
-  query,
   createSdkMcpServer,
+  query,
   tool,
-  type SDKMessage,
   type McpSdkServerConfigWithInstance,
+  type SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import "dotenv/config";
 import { z } from "zod";
 import { createDeniedPermissionCallback } from "../../src/integrations/claude-sdk";
 
@@ -219,8 +218,8 @@ if (!process.env.ANTHROPIC_API_KEY) {
   process.exit(1);
 }
 
-if (!process.env.DENIED_URL) {
-  console.error("DENIED_URL not set");
+if (!process.env.DENIED_URL && !process.env.DENIED_API_KEY) {
+  console.error("Neither DENIED_URL nor DENIED_API_KEY is set");
   process.exit(1);
 }
 

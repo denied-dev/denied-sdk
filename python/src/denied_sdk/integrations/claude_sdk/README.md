@@ -5,6 +5,7 @@ Frictionless authorization layer for Claude agents. Intercepts tool calls and en
 ## Quick Start
 
 **1. Install:**
+
 ```bash
 pip install "denied-sdk[claude-sdk]"
 # or with uv
@@ -12,6 +13,7 @@ uv add "denied-sdk[claude-sdk]"
 ```
 
 **2. Add to your agent:**
+
 ```python
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 from denied_sdk.integrations.claude_sdk import create_denied_permission_callback
@@ -32,8 +34,9 @@ async with ClaudeSDKClient(options) as client:
 ```
 
 **3. Set environment variables:**
+
 ```bash
-export DENIED_URL="https://app.denied.dev/pdp/123"
+export DENIED_URL="https://api.denied.dev"
 export DENIED_API_KEY="your-api-key"
 ```
 
@@ -50,6 +53,7 @@ User Request -> Claude -> can_use_tool callback
 ```
 
 The callback extracts context and sends to Denied:
+
 - **Principal**: `user_id`, `session_id`, `role` (from callback args)
 - **Resource**: `tool_name`, `tool_input` (from tool call)
 - **Action**: Inferred from tool name (`Read` -> read, `Write` -> create, etc.)
@@ -60,7 +64,6 @@ The callback extracts context and sends to Denied:
 from denied_sdk.integrations.claude_sdk import AuthorizationConfig, create_denied_permission_callback
 
 config = AuthorizationConfig(
-    denied_url="https://app.denied.dev/pdp/123",
     denied_api_key="your-key",
     fail_mode="closed",     # or "open" - behavior when Denied is unavailable
     retry_attempts=2,
@@ -95,6 +98,7 @@ allow {
 ```
 
 Pass attributes when creating the callback:
+
 ```python
 permission_callback = create_denied_permission_callback(
     user_id="alice",
@@ -113,12 +117,14 @@ permission_callback = create_denied_permission_callback(
 Tool names are mapped to actions:
 
 **Claude Code Built-in Tools:**
+
 - `Read`, `Glob`, `Grep`, `WebFetch`, `WebSearch` -> **read**
 - `Write` -> **create**
 - `Edit`, `MultiEdit`, `NotebookEdit` -> **update**
 - `Bash`, `Task`, `TodoWrite`, `KillShell` -> **execute**
 
 **MCP Tool Patterns:**
+
 - `list_*`, `get_*`, `search_*`, `read_*` -> **read**
 - `create_*`, `post_*`, `send_*`, `write_*` -> **create**
 - `update_*`, `patch_*`, `rename_*`, `edit_*` -> **update**

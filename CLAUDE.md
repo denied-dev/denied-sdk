@@ -5,6 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Overview
 
 This is a monorepo containing SDK implementations for the Denied authorization platform in multiple languages:
+
 - **Python SDK** (`/python`): Python 3.10+ client using httpx and Pydantic
 - **TypeScript SDK** (`/typescript`): TypeScript/JavaScript client using axios
 
@@ -106,6 +107,7 @@ pre-commit run --all-files
 ### Core Concepts
 
 Both SDKs implement the same authorization check pattern:
+
 1. **Entities**: Principals (users, services) and Resources (documents, APIs)
 2. **Checks**: Authorization requests that ask "Can this principal perform this action on this resource?"
 3. **Responses**: Boolean `allowed` flag with optional `reason` string
@@ -113,22 +115,27 @@ Both SDKs implement the same authorization check pattern:
 ### Client Design
 
 **Python** (`python/src/denied_sdk/client.py`):
+
 - `DeniedClient` class with context manager support (`__enter__`/`__exit__`)
 - Must call `close()` or use as context manager to clean up httpx connection pool
 - Uses Pydantic models for validation
-- API key passed via `x-api-key` header
+- API key passed via `X-API-Key` header
+- Check endpoints: `/pdp/check` and `/pdp/check/bulk`
 
 **TypeScript** (`typescript/src/client.ts`):
+
 - `DeniedClient` class with axios instance
-- API key passed via `x-api-key` header
+- API key passed via `X-API-Key` header
+- Check endpoints: `/pdp/check` and `/pdp/check/bulk`
 - Promise-based async API
 
 ### Configuration
 
 Both SDKs support configuration via:
+
 1. Constructor parameters (takes precedence)
 2. Environment variables:
-   - `DENIED_URL`: Server URL (default: `http://localhost:8421`)
+   - `DENIED_URL`: Server URL (default: `https://api.denied.dev`)
    - `DENIED_API_KEY`: API key for authentication
 
 ### Schema Architecture
@@ -136,6 +143,7 @@ Both SDKs support configuration via:
 The schema implementations use different validation approaches but represent the same concepts:
 
 **Python** (`python/src/denied_sdk/schemas/check.py`):
+
 - Pydantic models with runtime validation
 - `EntityCheck` base class with `@model_validator` ensuring either `uri` or `attributes` is provided
 - `PrincipalCheck` and `ResourceCheck` inherit from `EntityCheck` with literal type discrimination
@@ -143,6 +151,7 @@ The schema implementations use different validation approaches but represent the
 - `CheckResponse` contains `allowed`, optional `reason`, and optional `rules` list
 
 **TypeScript** (`typescript/src/schemas.ts`):
+
 - TypeScript interfaces (compile-time types only)
 - `EntityCheck` base interface
 - `PrincipalCheck` and `ResourceCheck` extend with discriminated union on `type`
@@ -151,6 +160,7 @@ The schema implementations use different validation approaches but represent the
 ### Entity Types
 
 Both SDKs define an `EntityType` enum:
+
 - `Principal` (or `principal`): Represents users, services, or other actors
 - `Resource` (or `resource`): Represents documents, APIs, or other protected resources
 
@@ -161,29 +171,35 @@ Python uses string-valued enum, TypeScript uses string literals.
 Both clients expose two methods:
 
 1. **`check()`**: Single authorization check
+   - Sends POST to `/pdp/check` endpoint
    - Accepts optional `principal_uri`/`principalUri` and `resource_uri`/`resourceUri`
    - Accepts optional `principal_attributes`/`principalAttributes` and `resource_attributes`/`resourceAttributes`
    - Default action is `"access"`
    - Returns `CheckResponse`
 
 2. **`bulk_check()`/`bulkCheck()`**: Multiple checks in one request
+   - Sends POST to `/pdp/check/bulk` endpoint
    - Accepts array of `CheckRequest` objects
    - Returns array of `CheckResponse` objects
 
 ### Key Implementation Details
 
 **Python-specific**:
+
 - Resource cleanup is critical: use context manager pattern or manually call `close()`
 - Error handling wraps `httpx.HTTPStatusError` with response body in message
 - Uses `model_dump()` to serialize Pydantic models to JSON
 - Uses `model_validate()` to deserialize JSON to Pydantic models
+- Headers built dynamically to include optional API key
 
 **TypeScript-specific**:
+
 - Axios error handling wraps errors with HTTP status and response data
 - Uses object spread to construct requests inline
 - Exports both types and runtime values from `index.ts`
 - CommonJS module format (`type: "commonjs"` in package.json)
 - Builds to `./dist` directory with type declarations
+- Headers built dynamically to include optional API key
 
 ## Project Structure
 
@@ -218,6 +234,7 @@ denied-sdk/
 ### Adding New Features
 
 When adding new features to either SDK:
+
 1. Update schemas first (Pydantic models in Python, interfaces in TypeScript)
 2. Add methods to the respective `DeniedClient` class
 3. Export new types/classes from the main `__init__.py` or `index.ts`
@@ -227,12 +244,14 @@ When adding new features to either SDK:
 ### Publishing
 
 **Python**:
+
 - Version is in `pyproject.toml`
 - Build with `python -m build`
 - Package is built to `dist/` directory
 - Uses hatchling as build backend
 
 **TypeScript**:
+
 - Version is in `package.json`
 - `prepublishOnly` script runs `pnpm run build` automatically
 - Package includes only `./dist` directory (specified in `files` field)
@@ -242,9 +261,11 @@ When adding new features to either SDK:
 ## Error Handling
 
 Both SDKs propagate HTTP errors from the server:
+
 - Python raises `httpx.HTTPStatusError` with response body appended to message
 - TypeScript throws `Error` with formatted HTTP status and response data
 
 Validation errors:
+
 - Python raises Pydantic `ValidationError` for invalid schemas
 - TypeScript relies on compile-time type checking (no runtime validation)

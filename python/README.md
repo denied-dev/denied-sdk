@@ -20,7 +20,7 @@ pip install denied-sdk
 from denied_sdk import DeniedClient
 
 # Initialize the client
-client = DeniedClient(url="http://localhost:8421", api_key="your-api-key")
+client = DeniedClient(api_key="your-api-key")
 
 # Check authorization
 result = client.check(
@@ -38,16 +38,26 @@ if result.reason:
 
 The SDK can be configured using constructor parameters or environment variables:
 
-- **URL**: `url` parameter or `DENIED_URL` environment variable (default: `http://localhost:8421`)
+- **URL**: `url` parameter or `DENIED_URL` environment variable (default: `https://api.denied.dev`)
 - **API Key**: `api_key` parameter or `DENIED_API_KEY` environment variable
 
 ```python
 # Using environment variables
 import os
-os.environ["DENIED_URL"] = "https://denied.example.com"
+
 os.environ["DENIED_API_KEY"] = "your-api-key"
 
-client = DeniedClient()  # Will use environment variables
+client = DeniedClient()
+
+# To use a custom URL (e.g., self-hosted instance):
+os.environ["DENIED_URL"] = "https://example.denied.dev"
+client = DeniedClient()  # Will use custom URL
+
+# Or pass directly to constructor:
+client = DeniedClient(
+    url="https://example.denied.dev",
+    api_key="your-api-key",
+)
 ```
 
 ## API Reference
@@ -57,6 +67,7 @@ client = DeniedClient()  # Will use environment variables
 Check whether a principal has permissions to perform an action on a resource.
 
 **Parameters:**
+
 - `principal_uri` (str, optional): The identifier of the principal
 - `resource_uri` (str, optional): The identifier of the resource
 - `principal_attributes` (dict, optional): The attributes of the principal
@@ -95,6 +106,7 @@ result = client.check(
 Perform multiple permission checks in a single request.
 
 **Parameters:**
+
 - `check_requests` (list[CheckRequest]): List of check requests
 
 **Returns:** `list[CheckResponse]`
@@ -127,12 +139,14 @@ for result in results:
 ### EntityType
 
 Enum for entity types:
+
 - `EntityType.Principal`: Represents a principal (user, service, etc.)
 - `EntityType.Resource`: Represents a resource
 
 ### CheckRequest
 
 Authorization check request with:
+
 - `principal`: PrincipalCheck
 - `resource`: ResourceCheck
 - `action`: str
@@ -140,6 +154,7 @@ Authorization check request with:
 ### CheckResponse
 
 Authorization check response with:
+
 - `allowed`: bool
 - `reason`: str | None
 
