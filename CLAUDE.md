@@ -60,29 +60,28 @@ The TypeScript SDK uses `pnpm`:
 
 ```bash
 # Install dependencies
-cd typescript
 pnpm install
 
 # Build (compile TypeScript to JavaScript)
-pnpm run build
+pnpm run --filter denied-sdk build
 
 # Lint (check only)
-pnpm run lint
+pnpm run --filter denied-sdk lint
 
 # Lint (with auto-fix)
-pnpm run lint:fix
+pnpm run --filter denied-sdk lint:fix
 
 # Format check
-pnpm run format:check
+pnpm run --filter denied-sdk format:check
 
 # Format (apply)
-pnpm run format
+pnpm run --filter denied-sdk format
 
 # Run all tests
-pnpm run test
+pnpm run --filter denied-sdk test
 
 # Run tests in watch mode
-pnpm run test:watch
+pnpm run --filter denied-sdk test:watch
 
 # Run example
 node examples/example-usage.ts  # After building
@@ -94,7 +93,6 @@ The OpenClaw extension uses `pnpm` and is loaded at runtime via jiti (no build s
 
 ```bash
 # Install dependencies
-cd extensions/openclaw
 pnpm install
 
 # Install into OpenClaw (from repo root)
