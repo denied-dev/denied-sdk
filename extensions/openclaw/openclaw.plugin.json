@@ -1,0 +1,17 @@
+{
+  "id": "denied-sdk-openclaw",
+  "name": "Denied SDK Hook Plugin for OpenClaw",
+  "description": "Enforce authorization before each tool call using the Denied policy engine.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "deniedUrl": { "type": "string" },
+      "deniedApiKey": { "type": "string" }
+    }
+  },
+  "uiHints": {
+    "deniedUrl": { "label": "Denied base URL" },
+    "deniedApiKey": { "label": "Denied API Key", "sensitive": true }
+  }
+}
