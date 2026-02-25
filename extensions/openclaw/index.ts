@@ -1,7 +1,9 @@
 import createDeniedHook from "./src/handler";
 
 export default function register(api) {
-  api.on("before_tool_call", createDeniedHook(api.pluginConfig), {
+  const config = api.pluginConfig ?? {};
+
+  api.on("before_tool_call", createDeniedHook(config), {
     priority: 1000,
   });
 }
