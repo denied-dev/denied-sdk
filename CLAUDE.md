@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This is a monorepo containing SDK implementations for the Denied authorization platform in multiple languages:
+This is a monorepo containing SDK implementations for the Denied authorization platform in multiple languages, plus platform extensions:
 
 - **Python SDK** (`/python`): Python 3.10+ client using httpx and Pydantic
 - **TypeScript SDK** (`/typescript`): TypeScript/JavaScript client using axios
+- **OpenClaw extension** (`/extensions/openclaw`): OpenClaw plugin that enforces authorization on every tool call
 
 Both SDKs provide identical functionality for interacting with a Denied authorization server following the Authzen Authorization API 1.0 specification to check permissions for subjects performing actions on resources.
 
@@ -59,32 +60,46 @@ The TypeScript SDK uses `pnpm`:
 
 ```bash
 # Install dependencies
-cd typescript
 pnpm install
 
 # Build (compile TypeScript to JavaScript)
-pnpm run build
+pnpm run --filter denied-sdk build
 
 # Lint (check only)
-pnpm run lint
+pnpm run --filter denied-sdk lint
 
 # Lint (with auto-fix)
-pnpm run lint:fix
+pnpm run --filter denied-sdk lint:fix
 
 # Format check
-pnpm run format:check
+pnpm run --filter denied-sdk format:check
 
 # Format (apply)
-pnpm run format
+pnpm run --filter denied-sdk format
 
 # Run all tests
-pnpm run test
+pnpm run --filter denied-sdk test
 
 # Run tests in watch mode
-pnpm run test:watch
+pnpm run --filter denied-sdk test:watch
 
 # Run example
 node examples/example-usage.ts  # After building
+```
+
+### OpenClaw Extension (`/extensions/openclaw`)
+
+The OpenClaw extension uses `pnpm` and is loaded at runtime via jiti (no build step):
+
+```bash
+# Install dependencies
+pnpm install
+
+# Install into OpenClaw (from repo root)
+openclaw plugins install ./extensions/openclaw
+
+# Or link for development (no copy)
+openclaw plugins install -l ./extensions/openclaw
 ```
 
 ### Pre-commit Hooks
@@ -266,15 +281,24 @@ denied-sdk/
 │   │   └── example_usage.py
 │   └── pyproject.toml           # Python package config
 │
-└── typescript/
-    ├── src/
-    │   ├── index.ts             # Public API exports
-    │   ├── client.ts            # DeniedClient implementation
-    │   └── schemas.ts           # Authzen-compliant TypeScript interfaces
-    ├── examples/
-    │   └── example-usage.ts
-    ├── package.json             # NPM package config
-    └── tsconfig.json            # TypeScript compiler config
+├── typescript/
+│   ├── src/
+│   │   ├── index.ts             # Public API exports
+│   │   ├── client.ts            # DeniedClient implementation
+│   │   └── schemas.ts           # Authzen-compliant TypeScript interfaces
+│   ├── examples/
+│   │   └── example-usage.ts
+│   ├── package.json             # NPM package config
+│   └── tsconfig.json            # TypeScript compiler config
+│
+└── extensions/
+    └── openclaw/
+        ├── src/
+        │   ├── handler.ts       # before_tool_call hook implementation
+        │   └── types.ts         # OpenClaw hook types + PluginConfig
+        ├── index.ts             # Plugin entrypoint (register function)
+        ├── openclaw.plugin.json # Plugin manifest (id, configSchema, uiHints)
+        └── package.json         # Package config (openclaw.extensions entry)
 ```
 
 ## Development Workflow
@@ -288,6 +312,17 @@ When adding new features to either SDK:
 3. Export new types/classes from the main `__init__.py` or `index.ts`
 4. Update examples if adding user-facing functionality
 5. Maintain API parity between both SDKs
+
+### OpenClaw Extension Design
+
+The plugin (`extensions/openclaw`) registers a `before_tool_call` hook via `api.on(...)` at priority `1000`. For each tool call:
+
+1. It reads `api.pluginConfig` (typed as `DeniedPluginConfig`) at registration time to instantiate `DeniedClient` once
+2. The hook sends a Denied check with subject `openclaw/<agentId>`, action `execute`, and resource `tool/<toolName>`
+3. If the decision is `false`, the tool call is blocked with the reason from the Denied response
+4. If the Denied server is unreachable, the hook logs the error and allows the call (fail-open)
+
+Config is declared in `openclaw.plugin.json` (`configSchema` + `uiHints`) and read in `index.ts` via `api.pluginConfig`. The TypeScript type `DeniedPluginConfig` in `src/types.ts` must stay in sync with the JSON Schema in the manifest.
 
 ### Publishing
 
@@ -305,6 +340,13 @@ When adding new features to either SDK:
 - Package includes only `./dist` directory (specified in `files` field)
 - Main entry point: `./dist/index.js`
 - Type definitions: `./dist/index.d.ts`
+
+**OpenClaw extension**:
+
+- Version is in `extensions/openclaw/package.json`
+- No build step — jiti loads TypeScript directly at runtime
+- Published as `@denied-dev/denied-openclaw`; `openclaw.extensions` in `package.json` points at `./index.ts`
+- Install via `openclaw plugins install @denied-dev/denied-openclaw`
 
 ## Error Handling
 

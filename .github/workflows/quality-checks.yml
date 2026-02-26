@@ -58,26 +58,23 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "pnpm"
-          cache-dependency-path: typescript/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
-        working-directory: ./typescript
         run: pnpm install --frozen-lockfile
 
-      - name: Run ESLint
-        working-directory: ./typescript
-        run: pnpm run lint
+      - name: Run ESLint (denied-sdk)
+        run: pnpm run --filter denied-sdk lint
 
-      - name: Run Prettier check
-        working-directory: ./typescript
-        run: pnpm run format:check
+      - name: Run Prettier check (denied-sdk)
+        run: pnpm run --filter denied-sdk format:check
 
   ts-test:
     name: TypeScript - Tests
@@ -94,23 +91,20 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: "pnpm"
-          cache-dependency-path: typescript/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
-        working-directory: ./typescript
         run: pnpm install --frozen-lockfile
 
       - name: Run tests
-        working-directory: ./typescript
-        run: pnpm run test
+        run: pnpm run --filter denied-sdk test
 
-      - name: Build package
-        working-directory: ./typescript
-        run: pnpm run build
+      - name: Build (denied-sdk)
+        run: pnpm run --filter denied-sdk build
