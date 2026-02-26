@@ -1,9 +1,30 @@
 {
-  "name": "denied-sdk-openclaw",
+  "name": "@denied-dev/denied-openclaw",
   "version": "0.5.0",
-  "private": true,
   "description": "Denied SDK Hook Plugin for OpenClaw",
+  "keywords": [
+    "denied",
+    "sdk",
+    "openclaw",
+    "authorization"
+  ],
+  "homepage": "https://github.com/denied-dev/denied-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/denied-dev/denied-sdk/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/denied-dev/denied-sdk.git",
+    "directory": "extensions/openclaw"
+  },
+  "license": "Apache-2.0",
+  "author": "Denied team",
   "type": "module",
+  "files": [
+    "./index.ts",
+    "./src",
+    "./openclaw.plugin.json"
+  ],
   "openclaw": {
     "extensions": [
       "./index.ts"

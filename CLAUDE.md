@@ -345,8 +345,8 @@ Config is declared in `openclaw.plugin.json` (`configSchema` + `uiHints`) and re
 
 - Version is in `extensions/openclaw/package.json`
 - No build step — jiti loads TypeScript directly at runtime
-- Published as `denied-sdk-openclaw`; `openclaw.extensions` in `package.json` points at `./index.ts`
-- Install via `openclaw plugins install denied-sdk-openclaw`
+- Published as `@denied-dev/denied-openclaw`; `openclaw.extensions` in `package.json` points at `./index.ts`
+- Install via `openclaw plugins install @denied-dev/denied-openclaw`
 
 ## Error Handling
 
