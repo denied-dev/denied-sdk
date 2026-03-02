@@ -11,7 +11,8 @@ Make permission checks with a simple API that follows Authzen Authorization API 
 
 ## Available Extensions
 
-- **[OpenClaw](./extensions/openclaw/README.md)**: OpenClaw plugin that enforces authorization on every tool call
+- **[Claude Code](./extensions/claude-code/README.md)**: hook plugin that enforces authorization on every tool call
+- **[OpenClaw](./extensions/openclaw/README.md)**: hook plugin that enforces authorization on every tool call
 
 ## License
 
