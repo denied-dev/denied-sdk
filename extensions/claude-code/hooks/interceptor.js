@@ -93,7 +93,7 @@ async function main() {
   const body = {
     subject: {
       type: "claude-code",
-      id: input.session_id,
+      id: input.session_id ?? "unknown",
       properties: {
         cwd: input.cwd,
         permission_mode: input.permission_mode,
@@ -104,7 +104,7 @@ async function main() {
     },
     resource: {
       type: "tool",
-      id: input.tool_name,
+      id: input.tool_name ?? "unknown",
       properties: {
         tool_input: input.tool_input || {},
         tool_use_id: input.tool_use_id || "unknown",

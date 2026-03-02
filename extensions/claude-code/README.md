@@ -37,8 +37,8 @@ Start a new Claude Code session. The plugin is now active — every tool call wi
 When a tool call is blocked, Claude Code will display the denial reason inline. You can also check stderr output for lines like:
 
 ```
-[denied] Blocked tool call: Bash
-[denied] Blocked tool call: Write
+[denied-dev] Blocked tool call: Bash
+[denied-dev] Blocked tool call: Write
 ```
 
 ## Configuration reference
@@ -56,7 +56,7 @@ When a tool call is blocked, Claude Code will display the denial reason inline. 
 **Fail-open on error**: If the Denied server is unreachable (network issue, server down), tool calls are allowed through. This prevents the plugin from completely breaking the agent. Set `DENIED_FAIL_MODE=closed` for stricter enforcement. You'll see log entries like:
 
 ```
-[denied] Failed to reach Denied PDP: fetch failed
+[denied-dev] Failed to reach Denied PDP: fetch failed
 ```
 
 ## How it works
@@ -85,7 +85,7 @@ The Denied dashboard includes an AI policy generator that can read these decisio
 | `Failed to reach Denied PDP: ...`     | Plugin can't reach the Denied server | Check `DENIED_URL` is correct and network connectivity.                                                                        |
 | `HTTP 401` or `403`                   | Invalid or missing API key           | Check `DENIED_API_KEY` env var.                                                                                                |
 | `DENIED_API_KEY is not set`           | No API key configured                | Set the `DENIED_API_KEY` environment variable.                                                                                 |
-| No `[denied]` lines, tools run freely | Plugin not loaded                    | Verify the plugin is installed (`claude plugin list`) and restart Claude Code.                                                 |
+| No `[denied-dev]` lines, tools run freely | Plugin not loaded                    | Verify the plugin is installed (`claude plugin list`) and restart Claude Code.                                                 |
 
 ## Links
 
