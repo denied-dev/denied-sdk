@@ -1,0 +1,14 @@
+{
+  "name": "denied-dev",
+  "owner": {
+    "name": "Denied team",
+    "email": "support@denied.dev"
+  },
+  "plugins": [
+    {
+      "name": "denied-dev-hook",
+      "source": "./extensions/claude-code",
+      "description": "Enforce authorization before each tool call using Denied.dev"
+    }
+  ]
+}

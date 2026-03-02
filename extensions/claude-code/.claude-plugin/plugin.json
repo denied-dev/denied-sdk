@@ -1,0 +1,5 @@
+{
+  "name": "denied-dev-hook",
+  "description": "Enforce authorization before each tool call using Denied.dev",
+  "version": "0.5.0"
+}
