@@ -3,12 +3,11 @@
   "description": "Enforce authorization before each tool call using Denied.dev",
   "version": "0.5.0",
   "author": {
-    "name": "Denied Dev",
+    "name": "Denied Technologies",
     "email": "support@denied.dev"
   },
   "homepage": "https://denied.dev",
   "repository": "https://github.com/denied-dev/denied-sdk",
   "license": "Apache-2.0",
-  "keywords": ["authorization", "security", "policy"],
-  "hooks": "./hooks/hooks.json"
+  "keywords": ["authorization", "security", "policy"]
 }
