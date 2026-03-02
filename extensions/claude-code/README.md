@@ -53,11 +53,23 @@ When a tool call is blocked, Claude Code will display the denial reason inline. 
 
 **Default-deny**: With no policies configured in Denied, every tool call is blocked. This is intentional — you must explicitly define the boundaries for your agent by creating policies in the [Denied dashboard](https://app.denied.dev).
 
-**Fail-open on error**: If the Denied server is unreachable (network issue, server down), tool calls are allowed through. This prevents the plugin from completely breaking the agent. Set `DENIED_FAIL_MODE=closed` for stricter enforcement. You'll see log entries like:
+**Fail-open on error**: If the Denied server is unreachable (network issue, server down) or `DENIED_API_KEY` is not set, tool calls are allowed through. This prevents the plugin from completely breaking the agent. Set `DENIED_FAIL_MODE=closed` for stricter enforcement. You'll see log entries like:
 
 ```
 [denied-dev] Failed to reach Denied PDP: fetch failed
 ```
+
+## Authorization enforcement
+
+The plugin enforces Denied authorization checks on every tool call, **regardless of Claude Code's permission mode**.
+
+| Permission mode | Claude Code permissions | Denied authorization |
+|---|---|---|
+| `default`, `plan`, `acceptEdits` | Normal prompts | Enforced |
+| `dontAsk` | Auto-approved | Enforced |
+| `bypassPermissions` (`--dangerously-skip-permissions`) | Skipped | Enforced |
+
+`--dangerously-skip-permissions` bypasses Claude Code's built-in permission prompts, but it does **not** bypass Denied policy checks. This is intentional — Denied enforces organizational boundaries that are orthogonal to local permission delegation.
 
 ## How it works
 
@@ -86,6 +98,14 @@ The Denied dashboard includes an AI policy generator that can read these decisio
 | `HTTP 401` or `403`                   | Invalid or missing API key           | Check `DENIED_API_KEY` env var.                                                                                                |
 | `DENIED_API_KEY is not set`           | No API key configured                | Set the `DENIED_API_KEY` environment variable.                                                                                 |
 | No `[denied-dev]` lines, tools run freely | Plugin not loaded                    | Verify the plugin is installed (`claude plugin list`) and restart Claude Code.                                                 |
+
+## Uninstalling
+
+```bash
+claude plugin uninstall denied-dev-hook
+```
+
+Restart Claude Code after uninstalling. This removes the plugin and its hooks — no manual cleanup needed.
 
 ## Links
 

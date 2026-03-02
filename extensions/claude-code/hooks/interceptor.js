@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 // Denied SDK – Claude Code PreToolUse interceptor
 // Zero dependencies. Requires Node.js 18+ (native fetch).
 
