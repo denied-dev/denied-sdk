@@ -7,11 +7,17 @@
     "additionalProperties": false,
     "properties": {
       "deniedUrl": { "type": "string" },
-      "deniedApiKey": { "type": "string" }
+      "deniedApiKey": { "type": "string" },
+      "failMode": {
+        "type": "string",
+        "enum": ["open", "closed"],
+        "default": "open"
+      }
     }
   },
   "uiHints": {
     "deniedUrl": { "label": "Denied base URL" },
-    "deniedApiKey": { "label": "Denied API Key", "sensitive": true }
+    "deniedApiKey": { "label": "Denied API Key", "sensitive": true },
+    "failMode": { "label": "Fail mode (open or closed)" }
   }
 }

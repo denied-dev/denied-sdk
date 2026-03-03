@@ -329,7 +329,7 @@ The plugin (`extensions/openclaw`) registers a `before_tool_call` hook via `api.
 1. It reads `api.pluginConfig` (typed as `DeniedPluginConfig`) at registration time to instantiate `DeniedClient` once
 2. The hook sends a Denied check with subject `openclaw/<agentId>`, action `execute`, and resource `tool/<toolName>`
 3. If the decision is `false`, the tool call is blocked with the reason from the Denied response
-4. If the Denied server is unreachable, the hook logs the error and allows the call (fail-open)
+4. If the Denied server is unreachable, the hook logs the error and then follows the `failMode` setting: `open` (default) allows the call, `closed` denies it
 
 Config is declared in `openclaw.plugin.json` (`configSchema` + `uiHints`) and read in `index.ts` via `api.pluginConfig`. The TypeScript type `DeniedPluginConfig` in `src/types.ts` must stay in sync with the JSON Schema in the manifest.
 

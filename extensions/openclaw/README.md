@@ -117,18 +117,17 @@ When working correctly, you'll see lines like:
 
 ## Configuration reference
 
-| Config key     | Environment variable | Default                  |
-| -------------- | -------------------- | ------------------------ |
-| `deniedApiKey` | `DENIED_API_KEY`     | —                        |
-| `deniedUrl`    | `DENIED_URL`         | `https://api.denied.dev` |
-
-The `deniedUrl` does not need to be set unless you are running a custom deployment.
+| Config key     | Environment variable | Default                  | Description                                       |
+| -------------- | -------------------- | ------------------------ | ------------------------------------------------- |
+| `deniedApiKey` | `DENIED_API_KEY`     | —                        | Required. API key for the Denied PDP.             |
+| `deniedUrl`    | `DENIED_URL`         | `https://api.denied.dev` | PDP endpoint. Only change for custom deployments. |
+| `failMode`     | `DENIED_FAIL_MODE`   | `open`                   | `open` = allow when PDP errors, `closed` = deny.  |
 
 ## Default behavior
 
 **Default-deny**: With no policies configured, every tool call is blocked. This is intentional, you must explicitly define the boundaries for your agent by creating policies in the [Denied dashboard](https://app.denied.dev).
 
-**Fail-open on error**: If the Denied server is unreachable (network issue, server down), tool calls are allowed through. This prevents the plugin from completely breaking the agent. You'll see log entries like:
+**Fail-open on error**: If the Denied server is unreachable (network issue, server down) or fails, tool calls are allowed through by default. This prevents the plugin from completely breaking the agent. Set `failMode` to `closed` (or `DENIED_FAIL_MODE=closed`) for stricter enforcement. You'll see log entries like:
 
 ```
 [plugin:denied-dev] Failed: HTTP 503: "no healthy upstream"

@@ -7,11 +7,18 @@ import {
   PluginHookToolContext,
 } from "./types";
 
+declare const process: { env: Record<string, string | undefined> };
+
 export default function createDeniedHook(config: DeniedPluginConfig) {
   const denied = new DeniedClient({
     url: config.deniedUrl,
     apiKey: config.deniedApiKey,
   });
+  const failMode = (
+    config.failMode ??
+    process.env.DENIED_FAIL_MODE ??
+    "open"
+  ).toLowerCase();
 
   return async function beforeToolCallDeniedHook(
     event: PluginHookBeforeToolCallEvent,
@@ -44,6 +51,12 @@ export default function createDeniedHook(config: DeniedPluginConfig) {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.log(`[plugin:denied-dev] Failed: ${message}`);
+      if (failMode === "closed") {
+        return {
+          block: true,
+          blockReason: `Denied policy engine unavailable and fail-mode is closed. ${message}`,
+        };
+      }
     }
 
     return {
