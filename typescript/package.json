@@ -1,6 +1,6 @@
 {
   "name": "@denied-dev/denied-sdk",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Denied SDK for TypeScript",
   "keywords": [
     "denied",
