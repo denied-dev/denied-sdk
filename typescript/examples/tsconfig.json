@@ -3,7 +3,7 @@
   "compilerOptions": {
     "noEmit": true,
     "paths": {
-      "denied-sdk": ["../src/index"]
+      "@denied-dev/denied-sdk": ["../src/index"]
     }
   },
   "include": ["**/*.ts"]

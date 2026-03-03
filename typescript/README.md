@@ -5,13 +5,13 @@ A lightweight TypeScript SDK for the Denied authorization platform.
 ## Installation
 
 ```bash
-npm install denied-sdk
+npm install @denied-dev/denied-sdk
 ```
 
 ## Quick Start
 
 ```typescript
-import { DeniedClient } from "denied-sdk";
+import { DeniedClient } from "@denied-dev/denied-sdk";
 
 const client = new DeniedClient({ apiKey: "your-api-key" });
 
