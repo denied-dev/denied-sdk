@@ -63,6 +63,7 @@ When a tool call is blocked, Claude Code will display the denial reason inline. 
 | `DENIED_API_KEY`     | —                        | Required. API key for the Denied PDP.                             |
 | `DENIED_URL`         | `https://api.denied.dev` | PDP endpoint. Only change for custom deployments.                 |
 | `DENIED_FAIL_MODE`   | `open`                   | `open` = allow on error, `closed` = deny when PDP is unreachable. |
+| `DENIED_TIMEOUT_MS`  | `15000`                  | Timeout in milliseconds.                                          |
 
 ## Default behavior
 

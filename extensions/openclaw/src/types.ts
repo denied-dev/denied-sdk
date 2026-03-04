@@ -21,4 +21,5 @@ export type DeniedPluginConfig = {
   deniedUrl?: string;
   deniedApiKey?: string;
   failMode?: "open" | "closed";
+  timeout?: number;
 };

@@ -9,15 +9,22 @@ import {
 
 declare const process: { env: Record<string, string | undefined> };
 
+const DEFAULT_TIMEOUT_MS = 15_000;
+const DEFAULT_FAIL_MODE = "open";
+
 export default function createDeniedHook(config: DeniedPluginConfig) {
+  const timeoutFromEnv = parseInt(process.env.DENIED_TIMEOUT_MS ?? "");
   const denied = new DeniedClient({
     url: config.deniedUrl,
     apiKey: config.deniedApiKey,
+    timeout:
+      config.timeout ??
+      (Number.isFinite(timeoutFromEnv) ? timeoutFromEnv : DEFAULT_TIMEOUT_MS),
   });
   const failMode = (
     config.failMode ??
     process.env.DENIED_FAIL_MODE ??
-    "open"
+    DEFAULT_FAIL_MODE
   ).toLowerCase();
 
   return async function beforeToolCallDeniedHook(

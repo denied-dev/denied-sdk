@@ -122,6 +122,7 @@ When working correctly, you'll see lines like:
 | `deniedApiKey` | `DENIED_API_KEY`     | —                        | Required. API key for the Denied PDP.             |
 | `deniedUrl`    | `DENIED_URL`         | `https://api.denied.dev` | PDP endpoint. Only change for custom deployments. |
 | `failMode`     | `DENIED_FAIL_MODE`   | `open`                   | `open` = allow when PDP errors, `closed` = deny.  |
+| `timeout`      | `DENIED_TIMEOUT_MS`  | `15000`                  | Timeout in milliseconds.                          |
 
 ## Default behavior
 

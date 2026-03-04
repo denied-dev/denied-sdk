@@ -12,12 +12,14 @@
         "type": "string",
         "enum": ["open", "closed"],
         "default": "open"
-      }
+      },
+      "timeout": { "type": "number" }
     }
   },
   "uiHints": {
     "deniedUrl": { "label": "Denied base URL" },
     "deniedApiKey": { "label": "Denied API Key", "sensitive": true },
-    "failMode": { "label": "Fail mode (open or closed)" }
+    "failMode": { "label": "Fail mode (open or closed)" },
+    "timeout": { "label": "Timeout (in milliseconds)" }
   }
 }
