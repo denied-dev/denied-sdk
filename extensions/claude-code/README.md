@@ -24,8 +24,23 @@ claude plugin install denied-dev-hook
 
 ### Step 3: Set your API key
 
+Set your API key as an environment variable:
+
 ```bash
 export DENIED_API_KEY="your-api-key"
+```
+
+Alternatively, add the config directly in `~/.claude/settings.json` or `./claude/settings.local.json`:
+
+```json
+{
+  "enabledPlugins": {
+    "denied-dev-hook@denied-dev": true
+  },
+  "env": {
+    "DENIED_API_KEY": "your-api-key"
+  }
+}
 ```
 
 ### Step 4: Restart Claude Code
