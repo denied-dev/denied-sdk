@@ -18,7 +18,10 @@
     "directory": "typescript"
   },
   "license": "Apache-2.0",
-  "author": "Denied team",
+  "author": {
+    "name": "Denied Technologies",
+    "email": "support@denied.dev"
+  },
   "type": "commonjs",
   "exports": {
     ".": "./dist/index.js"

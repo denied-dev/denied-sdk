@@ -18,7 +18,10 @@
     "directory": "extensions/openclaw"
   },
   "license": "Apache-2.0",
-  "author": "Denied team",
+  "author": {
+    "name": "Denied Technologies",
+    "email": "support@denied.dev"
+  },
   "type": "module",
   "files": [
     "./index.ts",
