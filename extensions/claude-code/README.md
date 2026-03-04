@@ -24,8 +24,23 @@ claude plugin install denied-dev-hook
 
 ### Step 3: Set your API key
 
+Set your API key as an environment variable:
+
 ```bash
 export DENIED_API_KEY="your-api-key"
+```
+
+Alternatively, add the config directly in `~/.claude/settings.json` or `./claude/settings.local.json`:
+
+```json
+{
+  "enabledPlugins": {
+    "denied-dev-hook@denied-dev": true
+  },
+  "env": {
+    "DENIED_API_KEY": "your-api-key"
+  }
+}
 ```
 
 ### Step 4: Restart Claude Code
@@ -63,11 +78,11 @@ When a tool call is blocked, Claude Code will display the denial reason inline. 
 
 The plugin enforces Denied authorization checks on every tool call, **regardless of Claude Code's permission mode**.
 
-| Permission mode | Claude Code permissions | Denied authorization |
-|---|---|---|
-| `default`, `plan`, `acceptEdits` | Normal prompts | Enforced |
-| `dontAsk` | Auto-approved | Enforced |
-| `bypassPermissions` (`--dangerously-skip-permissions`) | Skipped | Enforced |
+| Permission mode                                        | Claude Code permissions | Denied authorization |
+| ------------------------------------------------------ | ----------------------- | -------------------- |
+| `default`, `plan`, `acceptEdits`                       | Normal prompts          | Enforced             |
+| `dontAsk`                                              | Auto-approved           | Enforced             |
+| `bypassPermissions` (`--dangerously-skip-permissions`) | Skipped                 | Enforced             |
 
 `--dangerously-skip-permissions` bypasses Claude Code's built-in permission prompts, but it does **not** bypass Denied policy checks. This is intentional — Denied enforces organizational boundaries that are orthogonal to local permission delegation.
 
@@ -91,12 +106,12 @@ The Denied dashboard includes an AI policy generator that can read these decisio
 
 ## Troubleshooting
 
-| Symptom                               | Meaning                              | Fix                                                                                                                            |
-| ------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| `Blocked tool call: <name>`           | Policy denied the tool call          | Working as intended. Create an allow policy in the [Denied dashboard](https://app.denied.dev) if the tool should be permitted. |
-| `Failed to reach Denied PDP: ...`     | Plugin can't reach the Denied server | Check `DENIED_URL` is correct and network connectivity.                                                                        |
-| `HTTP 401` or `403`                   | Invalid or missing API key           | Check `DENIED_API_KEY` env var.                                                                                                |
-| `DENIED_API_KEY is not set`           | No API key configured                | Set the `DENIED_API_KEY` environment variable.                                                                                 |
+| Symptom                                   | Meaning                              | Fix                                                                                                                            |
+| ----------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `Blocked tool call: <name>`               | Policy denied the tool call          | Working as intended. Create an allow policy in the [Denied dashboard](https://app.denied.dev) if the tool should be permitted. |
+| `Failed to reach Denied PDP: ...`         | Plugin can't reach the Denied server | Check `DENIED_URL` is correct and network connectivity.                                                                        |
+| `HTTP 401` or `403`                       | Invalid or missing API key           | Check `DENIED_API_KEY` env var.                                                                                                |
+| `DENIED_API_KEY is not set`               | No API key configured                | Set the `DENIED_API_KEY` environment variable.                                                                                 |
 | No `[denied-dev]` lines, tools run freely | Plugin not loaded                    | Verify the plugin is installed (`claude plugin list`) and restart Claude Code.                                                 |
 
 ## Uninstalling
