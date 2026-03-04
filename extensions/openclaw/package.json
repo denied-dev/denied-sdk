@@ -1,5 +1,5 @@
 {
-  "name": "@denied-dev/denied-openclaw",
+  "name": "@denied-dev/openclaw",
   "version": "0.5.1",
   "description": "Denied SDK Hook Plugin for OpenClaw",
   "keywords": [
@@ -31,6 +31,6 @@
     ]
   },
   "dependencies": {
-    "@denied-dev/denied-sdk": "workspace:*"
+    "@denied-dev/sdk": "workspace:*"
   }
 }

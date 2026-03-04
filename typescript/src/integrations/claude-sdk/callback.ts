@@ -108,7 +108,7 @@ async function checkWithRetry(
  * @example
  * ```typescript
  * import { query } from "@anthropic-ai/claude-agent-sdk";
- * import { createDeniedPermissionCallback } from "@denied-dev/denied-sdk";
+ * import { createDeniedPermissionCallback } from "@denied-dev/sdk";
  *
  * // Create the callback with user context, role, and resource scope
  * const permissionCallback = createDeniedPermissionCallback({

@@ -64,25 +64,25 @@ The TypeScript SDK uses `pnpm`:
 pnpm install
 
 # Build (compile TypeScript to JavaScript)
-pnpm run --filter denied-sdk build
+pnpm run --filter sdk build
 
 # Lint (check only)
-pnpm run --filter denied-sdk lint
+pnpm run --filter sdk lint
 
 # Lint (with auto-fix)
-pnpm run --filter denied-sdk lint:fix
+pnpm run --filter sdk lint:fix
 
 # Format check
-pnpm run --filter denied-sdk format:check
+pnpm run --filter sdk format:check
 
 # Format (apply)
-pnpm run --filter denied-sdk format
+pnpm run --filter sdk format
 
 # Run all tests
-pnpm run --filter denied-sdk test
+pnpm run --filter sdk test
 
 # Run tests in watch mode
-pnpm run --filter denied-sdk test:watch
+pnpm run --filter sdk test:watch
 
 # Run example
 node examples/example-usage.ts  # After building
@@ -366,8 +366,8 @@ Configuration is via environment variables (`DENIED_API_KEY`, `DENIED_URL`, `DEN
 
 - Version is in `extensions/openclaw/package.json`
 - No build step — jiti loads TypeScript directly at runtime
-- Published as `@denied-dev/denied-openclaw`; `openclaw.extensions` in `package.json` points at `./index.ts`
-- Install via `openclaw plugins install @denied-dev/denied-openclaw`
+- Published as `@denied-dev/openclaw`; `openclaw.extensions` in `package.json` points at `./index.ts`
+- Install via `openclaw plugins install @denied-dev/openclaw`
 
 **Claude Code extension**:
 

@@ -1,5 +1,5 @@
 /* eslint-disable no-console */
-import { CheckRequest, DeniedClient } from "@denied-dev/denied-sdk";
+import { CheckRequest, DeniedClient } from "@denied-dev/sdk";
 
 async function run(): Promise<void> {
   const client = new DeniedClient({

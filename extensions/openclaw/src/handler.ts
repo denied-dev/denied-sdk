@@ -1,4 +1,4 @@
-import { DeniedClient } from "@denied-dev/denied-sdk";
+import { DeniedClient } from "@denied-dev/sdk";
 
 import {
   DeniedPluginConfig,

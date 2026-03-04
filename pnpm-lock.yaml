@@ -8,7 +8,7 @@ importers:
 
   extensions/openclaw:
     dependencies:
-      '@denied-dev/denied-sdk':
+      '@denied-dev/sdk':
         specifier: workspace:*
         version: link:../../typescript
 
