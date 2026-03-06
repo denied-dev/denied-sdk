@@ -1,6 +1,6 @@
 {
-  "name": "denied-sdk",
-  "version": "0.5.0",
+  "name": "@denied-dev/sdk",
+  "version": "0.5.1",
   "description": "Denied SDK for TypeScript",
   "keywords": [
     "denied",
@@ -18,7 +18,10 @@
     "directory": "typescript"
   },
   "license": "Apache-2.0",
-  "author": "Denied team",
+  "author": {
+    "name": "Denied Technologies",
+    "email": "support@denied.dev"
+  },
   "type": "commonjs",
   "exports": {
     ".": "./dist/index.js"

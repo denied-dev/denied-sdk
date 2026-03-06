@@ -12,7 +12,7 @@ AI agents in OpenClaw can execute powerful tools, shell commands, file operation
 ### Step 1: Install the plugin
 
 ```bash
-openclaw plugins install @denied-dev/denied-openclaw
+openclaw plugins install @denied-dev/openclaw
 ```
 
 ### Step 2: Configure the plugin
@@ -29,7 +29,7 @@ Alternatively, add the config directly in `~/.openclaw/openclaw.json`:
 {
   "plugins": {
     "entries": {
-      "denied-openclaw": {
+      "denied-dev-hook": {
         "enabled": true,
         "config": {
           "deniedApiKey": "your-api-key"
@@ -66,7 +66,7 @@ When working correctly, you'll see lines like:
 ```bash
 docker compose run --rm \
   -e OPENCLAW_GATEWAY_URL=ws://openclaw-gateway:18789 \
-  openclaw-cli plugins install @denied-dev/denied-openclaw
+  openclaw-cli plugins install @denied-dev/openclaw
 ```
 
 ### Step 2: Configure the plugin
@@ -85,7 +85,7 @@ Alternatively, add the config directly in `~/.openclaw/openclaw.json`:
 {
   "plugins": {
     "entries": {
-      "denied-openclaw": {
+      "denied-dev-hook": {
         "enabled": true,
         "config": {
           "deniedApiKey": "your-api-key"
@@ -117,18 +117,18 @@ When working correctly, you'll see lines like:
 
 ## Configuration reference
 
-| Config key     | Environment variable | Default                  |
-| -------------- | -------------------- | ------------------------ |
-| `deniedApiKey` | `DENIED_API_KEY`     | —                        |
-| `deniedUrl`    | `DENIED_URL`         | `https://api.denied.dev` |
-
-The `deniedUrl` does not need to be set unless you are running a custom deployment.
+| Config key     | Environment variable | Default                  | Description                                       |
+| -------------- | -------------------- | ------------------------ | ------------------------------------------------- |
+| `deniedApiKey` | `DENIED_API_KEY`     | —                        | Required. API key for the Denied PDP.             |
+| `deniedUrl`    | `DENIED_URL`         | `https://api.denied.dev` | PDP endpoint. Only change for custom deployments. |
+| `failMode`     | `DENIED_FAIL_MODE`   | `open`                   | `open` = allow when PDP errors, `closed` = deny.  |
+| `timeout`      | `DENIED_TIMEOUT_MS`  | `15000`                  | Timeout in milliseconds.                          |
 
 ## Default behavior
 
 **Default-deny**: With no policies configured, every tool call is blocked. This is intentional, you must explicitly define the boundaries for your agent by creating policies in the [Denied dashboard](https://app.denied.dev).
 
-**Fail-open on error**: If the Denied server is unreachable (network issue, server down), tool calls are allowed through. This prevents the plugin from completely breaking the agent. You'll see log entries like:
+**Fail-open on error**: If the Denied server is unreachable (network issue, server down) or fails, tool calls are allowed through by default. This prevents the plugin from completely breaking the agent. Set `failMode` to `closed` (or `DENIED_FAIL_MODE=closed`) for stricter enforcement. You'll see log entries like:
 
 ```
 [plugin:denied-dev] Failed: HTTP 503: "no healthy upstream"
@@ -166,7 +166,7 @@ This means you can start with default-deny, let the agent run into the boundarie
 | `Failed: HTTP 503: "no healthy upstream"` | Plugin can't reach the Denied server | Check `deniedUrl` is correct. For Docker, ensure the container can reach external networks.                                    |
 | `Failed: HTTP 401` or `403`               | Invalid or missing API key           | Check `DENIED_API_KEY` env var or `deniedApiKey` in config.                                                                    |
 | `Failed: fetch failed`                    | Network connectivity issue           | Check DNS resolution and firewall rules. Docker containers may need specific network config to reach external services.        |
-| No `[plugin:denied-dev]` lines at all     | Plugin not loaded                    | Check that `plugins.entries.denied-openclaw.enabled` is `true` in config and restart the gateway.                              |
+| No `[plugin:denied-dev]` lines at all     | Plugin not loaded                    | Check that `plugins.entries.denied-dev-hook.enabled` is `true` in config and restart the gateway.                              |
 
 ## Links
 

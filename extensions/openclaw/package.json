@@ -1,6 +1,6 @@
 {
-  "name": "@denied-dev/denied-openclaw",
-  "version": "0.5.0",
+  "name": "@denied-dev/openclaw",
+  "version": "0.5.1",
   "description": "Denied SDK Hook Plugin for OpenClaw",
   "keywords": [
     "denied",
@@ -18,7 +18,10 @@
     "directory": "extensions/openclaw"
   },
   "license": "Apache-2.0",
-  "author": "Denied team",
+  "author": {
+    "name": "Denied Technologies",
+    "email": "support@denied.dev"
+  },
   "type": "module",
   "files": [
     "./index.ts",
@@ -31,6 +34,6 @@
     ]
   },
   "dependencies": {
-    "denied-sdk": "^0.5.0"
+    "@denied-dev/sdk": "workspace:*"
   }
 }

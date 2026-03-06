@@ -3,8 +3,17 @@
 
 const DENIED_URL = process.env.DENIED_URL || "https://api.denied.dev";
 const DENIED_API_KEY = process.env.DENIED_API_KEY || "";
-const FAIL_MODE = (process.env.DENIED_FAIL_MODE || "open").toLowerCase(); // "open" | "closed"
-const TIMEOUT_MS = 10_000;
+
+const DEFAULT_TIMEOUT_MS = 15_000;
+const DEFAULT_FAIL_MODE = "open"; // "open" | "closed"
+
+const timeoutFromEnv = parseInt(process.env.DENIED_TIMEOUT_MS ?? "");
+const TIMEOUT_MS = Number.isFinite(timeoutFromEnv)
+  ? timeoutFromEnv
+  : DEFAULT_TIMEOUT_MS;
+const FAIL_MODE = (
+  process.env.DENIED_FAIL_MODE || DEFAULT_FAIL_MODE
+).toLowerCase();
 
 // ---------------------------------------------------------------------------
 // Helpers

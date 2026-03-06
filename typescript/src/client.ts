@@ -15,6 +15,7 @@ import type {
 export interface DeniedClientOptions {
   url?: string;
   apiKey?: string;
+  timeout?: number;
 }
 
 /**
@@ -31,6 +32,7 @@ export class DeniedClient {
    * @param options - Configuration options for the client
    * @param options.url - The base URL of the Denied server (defaults to process.env.DENIED_URL or "https://api.denied.dev")
    * @param options.apiKey - The API key for authenticating with the decision node (defaults to process.env.DENIED_API_KEY)
+   * @param options.timeout - The timeout for the client in milliseconds (defaults to 60000)
    */
   constructor(options: DeniedClientOptions = {}) {
     this.url = options.url || process.env.DENIED_URL || "https://api.denied.dev";
@@ -44,7 +46,7 @@ export class DeniedClient {
     this.client = axios.create({
       baseURL: this.url,
       headers,
-      timeout: 60000,
+      timeout: options.timeout ?? 60000,
     });
   }
 

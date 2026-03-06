@@ -1,17 +1,25 @@
 {
-  "id": "denied-openclaw",
+  "id": "denied-dev-hook",
   "name": "Denied SDK Hook Plugin for OpenClaw",
-  "description": "Enforce authorization before each tool call using the Denied policy engine.",
+  "description": "Enforce authorization before each tool call using the Denied.dev",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
       "deniedUrl": { "type": "string" },
-      "deniedApiKey": { "type": "string" }
+      "deniedApiKey": { "type": "string" },
+      "failMode": {
+        "type": "string",
+        "enum": ["open", "closed"],
+        "default": "open"
+      },
+      "timeout": { "type": "number" }
     }
   },
   "uiHints": {
     "deniedUrl": { "label": "Denied base URL" },
-    "deniedApiKey": { "label": "Denied API Key", "sensitive": true }
+    "deniedApiKey": { "label": "Denied API Key", "sensitive": true },
+    "failMode": { "label": "Fail mode (open or closed)" },
+    "timeout": { "label": "Timeout (in milliseconds)" }
   }
 }

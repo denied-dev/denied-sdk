@@ -8,9 +8,9 @@ importers:
 
   extensions/openclaw:
     dependencies:
-      denied-sdk:
-        specifier: ^0.5.0
-        version: 0.5.0(@anthropic-ai/claude-agent-sdk@0.1.77(zod@3.25.76))
+      '@denied-dev/sdk':
+        specifier: workspace:*
+        version: link:../../typescript
 
   typescript:
     dependencies:
@@ -662,14 +662,6 @@ packages:
   delayed-stream@1.0.0:
     resolution: {integrity: sha512-ZySD7Nf91aLB0RxL4KGrKHBXl7Eds1DAmEdcoVawXnLD7SDhpNgtuII2aAkg7a7QS41jxPSZ17p4VdGnMHk3MQ==}
     engines: {node: '>=0.4.0'}
-
-  denied-sdk@0.5.0:
-    resolution: {integrity: sha512-A1y/6fwGX5t5zG7itHNXn0ng0DO98QthR1hk3dUFKOKF3ct27c33iedrjg2de5O+NLzGeRamrPtituToVRqCNA==}
-    peerDependencies:
-      '@anthropic-ai/claude-agent-sdk': ^0.1.0
-    peerDependenciesMeta:
-      '@anthropic-ai/claude-agent-sdk':
-        optional: true
 
   dotenv@17.3.1:
     resolution: {integrity: sha512-IO8C/dzEb6O3F9/twg6ZLXz164a2fhTnEWb95H23Dm4OuN+92NmEAlTrupP9VW6Jm3sO26tQlqyvyi4CsnY9GA==}
@@ -1677,14 +1669,6 @@ snapshots:
   deep-is@0.1.4: {}
 
   delayed-stream@1.0.0: {}
-
-  denied-sdk@0.5.0(@anthropic-ai/claude-agent-sdk@0.1.77(zod@3.25.76)):
-    dependencies:
-      axios: 1.13.5
-    optionalDependencies:
-      '@anthropic-ai/claude-agent-sdk': 0.1.77(zod@3.25.76)
-    transitivePeerDependencies:
-      - debug
 
   dotenv@17.3.1: {}
 

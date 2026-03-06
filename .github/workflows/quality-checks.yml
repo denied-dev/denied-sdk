@@ -70,11 +70,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run ESLint (denied-sdk)
-        run: pnpm run --filter denied-sdk lint
+      - name: Run ESLint (sdk)
+        run: pnpm run --filter sdk lint
 
-      - name: Run Prettier check (denied-sdk)
-        run: pnpm run --filter denied-sdk format:check
+      - name: Run Prettier check (sdk)
+        run: pnpm run --filter sdk format:check
 
   ts-test:
     name: TypeScript - Tests
@@ -103,8 +103,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run tests
-        run: pnpm run --filter denied-sdk test
+      - name: Run tests (sdk)
+        run: pnpm run --filter sdk test
 
-      - name: Build (denied-sdk)
-        run: pnpm run --filter denied-sdk build
+      - name: Build (sdk)
+        run: pnpm run --filter sdk build
