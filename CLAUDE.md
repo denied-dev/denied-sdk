@@ -9,6 +9,7 @@ This is a monorepo containing SDK implementations for the Denied authorization p
 - **Python SDK** (`/python`): Python 3.10+ client using httpx and Pydantic
 - **TypeScript SDK** (`/typescript`): TypeScript/JavaScript client using axios
 - **OpenClaw extension** (`/extensions/openclaw`): OpenClaw plugin that enforces authorization on every tool call
+- **Claude Code extension** (`/extensions/claude-code`): Claude Code hook plugin that enforces authorization on every tool call
 
 Both SDKs provide identical functionality for interacting with a Denied authorization server following the Authzen Authorization API 1.0 specification to check permissions for subjects performing actions on resources.
 
@@ -292,6 +293,14 @@ denied-sdk/
 │   └── tsconfig.json            # TypeScript compiler config
 │
 └── extensions/
+    ├── claude-code/
+    │   ├── .claude-plugin/
+    │   │   └── plugin.json       # Plugin manifest (name, version)
+    │   ├── hooks/
+    │   │   ├── hooks.json        # PreToolUse hook registration
+    │   │   └── interceptor.js    # Authorization interceptor (zero deps)
+    │   └── README.md             # Plugin documentation
+    │
     └── openclaw/
         ├── src/
         │   ├── handler.ts       # before_tool_call hook implementation
@@ -324,6 +333,18 @@ The plugin (`extensions/openclaw`) registers a `before_tool_call` hook via `api.
 
 Config is declared in `openclaw.plugin.json` (`configSchema` + `uiHints`) and read in `index.ts` via `api.pluginConfig`. The TypeScript type `DeniedPluginConfig` in `src/types.ts` must stay in sync with the JSON Schema in the manifest.
 
+### Claude Code Extension Design
+
+The plugin (`extensions/claude-code`) registers a `PreToolUse` hook via Claude Code's hook system. It is a zero-dependency Node.js script that uses native `fetch` (Node 18+). For each tool call:
+
+1. Claude Code streams the hook context as JSON to stdin (session ID, tool name, tool input, permission mode, cwd)
+2. The interceptor builds an AuthZEN evaluation request with subject `claude-code/<sessionId>`, action `execute`, and resource `tool/<toolName>`
+3. It sends a POST to the Denied PDP (`/pdp/check`) with the API key in the `X-API-Key` header
+4. If the decision is `false`, the tool call is denied and the reason is returned to the agent
+5. If the Denied server is unreachable, the plugin follows the `DENIED_FAIL_MODE` setting: `open` (default) allows the call, `closed` denies it
+
+Configuration is via environment variables (`DENIED_API_KEY`, `DENIED_URL`, `DENIED_FAIL_MODE`) — no build step or runtime dependencies required.
+
 ### Publishing
 
 **Python**:
@@ -347,6 +368,12 @@ Config is declared in `openclaw.plugin.json` (`configSchema` + `uiHints`) and re
 - No build step — jiti loads TypeScript directly at runtime
 - Published as `@denied-dev/denied-openclaw`; `openclaw.extensions` in `package.json` points at `./index.ts`
 - Install via `openclaw plugins install @denied-dev/denied-openclaw`
+
+**Claude Code extension**:
+
+- No build step — plain JavaScript executed directly by Claude Code's hook runner
+- No versioned package; installed as a Claude Code plugin via `claude plugin install`
+- Configuration is via environment variables (no package config)
 
 ## Error Handling
 
