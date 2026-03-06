@@ -19,7 +19,6 @@ function allow(reason) {
     },
   };
   process.stdout.write(JSON.stringify(out));
-  process.exit(0);
 }
 
 function deny(reason) {
@@ -31,7 +30,6 @@ function deny(reason) {
     },
   };
   process.stdout.write(JSON.stringify(out));
-  process.exit(0);
 }
 
 function failSafe(message) {
@@ -140,13 +138,15 @@ async function main() {
         data.context?.reason ??
         "Authorization allowed by Denied policy engine.";
       allow(reason);
-    } else {
+    } else if (data.decision === false) {
       const reason =
         data.context?.reason ?? "Authorization denied by Denied policy engine.";
       process.stderr.write(
         `[denied-dev] Blocked tool call: ${input.tool_name}\n`,
       );
       deny(reason);
+    } else {
+      failSafe(`Unexpected PDP response: missing or invalid 'decision' field.`);
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -154,4 +154,6 @@ async function main() {
   }
 }
 
-main();
+main().catch((err) => {
+  failSafe(`Unexpected error: ${err instanceof Error ? err.message : String(err)}`);
+});
