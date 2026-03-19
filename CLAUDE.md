@@ -366,8 +366,8 @@ Configuration is via environment variables (`DENIED_API_KEY`, `DENIED_URL`, `DEN
 
 - Version is in `extensions/openclaw/package.json`
 - No build step — jiti loads TypeScript directly at runtime
-- Published as `@denied-dev/openclaw`; `openclaw.extensions` in `package.json` points at `./index.ts`
-- Install via `openclaw plugins install @denied-dev/openclaw`
+- Published as `@denied-dev/denied-openclaw-plugin`; `openclaw.extensions` in `package.json` points at `./index.ts`
+- Install via `openclaw plugins install @denied-dev/denied-openclaw-plugin`
 
 **Claude Code extension**:
 
