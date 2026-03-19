@@ -1,5 +1,5 @@
 {
-  "id": "denied-dev-hook",
+  "id": "denied-openclaw-plugin",
   "name": "Denied SDK Hook Plugin for OpenClaw",
   "description": "Enforce authorization before each tool call using the Denied.dev",
   "configSchema": {
