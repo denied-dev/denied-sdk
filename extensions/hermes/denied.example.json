@@ -1,0 +1,9 @@
+{
+  "url": "https://api.denied.dev",
+  "apiKey": "${DENIED_API_KEY}",
+  "failMode": "open",
+  "timeoutMs": 15000,
+  "includeToolInput": true,
+  "semanticMapping": true,
+  "subjectId": "session"
+}
