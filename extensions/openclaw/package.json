@@ -1,6 +1,6 @@
 {
   "name": "@denied-dev/denied-openclaw-plugin",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Denied SDK Hook Plugin for OpenClaw",
   "keywords": [
     "denied",
@@ -24,16 +24,31 @@
   },
   "type": "module",
   "files": [
+    "./dist",
     "./index.ts",
     "./src",
     "./openclaw.plugin.json"
   ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "pnpm run build"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "runtimeExtensions": [
+      "./dist/index.js"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.5.12"
+    }
   },
   "dependencies": {
     "@denied-dev/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "typescript": "^5.8.0"
   }
 }

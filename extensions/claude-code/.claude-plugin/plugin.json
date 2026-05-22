@@ -1,7 +1,7 @@
 {
   "name": "denied-dev-hook",
   "description": "Enforce authorization before each tool call using Denied.dev",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "author": {
     "name": "Denied Technologies",
     "email": "support@denied.dev"
