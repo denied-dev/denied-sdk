@@ -369,7 +369,7 @@ Configuration is via environment variables (`DENIED_API_KEY`, `DENIED_URL`, `DEN
 - Build with `pnpm run build` (runs `tsc`); emits ESM to `dist/` with type declarations. `prepublishOnly` runs the build automatically
 - Published as `@denied-dev/denied-openclaw-plugin`. `openclaw.runtimeExtensions` points at the compiled `./dist/index.js` (used by registry installs); `openclaw.extensions` keeps `./index.ts` for local source/dev-link installs. `openclaw.compat.pluginApi` pins the minimum OpenClaw host that supports the compiled runtime loader
 - The published package includes `dist` in `files`
-- Install via `openclaw plugins install @denied-dev/denied-openclaw-plugin`
+- Install via `openclaw plugins install npm:@denied-dev/denied-openclaw-plugin`
 
 **Claude Code extension**:
 

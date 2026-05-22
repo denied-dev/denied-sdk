@@ -12,7 +12,7 @@ AI agents in OpenClaw can execute powerful tools, shell commands, file operation
 ### Step 1: Install the plugin
 
 ```bash
-openclaw plugins install @denied-dev/denied-openclaw-plugin
+openclaw plugins install npm:@denied-dev/denied-openclaw-plugin
 ```
 
 ### Step 2: Configure the plugin
@@ -66,7 +66,7 @@ When working correctly, you'll see lines like:
 ```bash
 docker compose run --rm \
   -e OPENCLAW_GATEWAY_URL=ws://openclaw-gateway:18789 \
-  openclaw-cli plugins install @denied-dev/denied-openclaw-plugin
+  openclaw-cli plugins install npm:@denied-dev/denied-openclaw-plugin
 ```
 
 ### Step 2: Configure the plugin

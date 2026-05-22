@@ -1,6 +1,6 @@
 [project]
 name = "denied-sdk"
-version = "0.5.1"
+version = "0.5.2"
 description = "Denied SDK for Python"
 authors = [{ name = "Denied Technologies", email = "support@denied.dev" }]
 license = "Apache-2.0"
