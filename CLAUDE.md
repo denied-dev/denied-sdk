@@ -90,16 +90,16 @@ node examples/example-usage.ts  # After building
 
 ### OpenClaw Extension (`/extensions/openclaw`)
 
-The OpenClaw extension uses `pnpm` and is loaded at runtime via jiti (no build step):
+The OpenClaw extension uses `pnpm`. Registry installs require compiled JavaScript, so the package ships a `tsc` build to `dist/`:
 
 ```bash
 # Install dependencies
 pnpm install
 
-# Install into OpenClaw (from repo root)
-openclaw plugins install ./extensions/openclaw
+# Build (compile TypeScript to dist/) — required before publishing or registry install
+pnpm run --filter @denied-dev/denied-openclaw-plugin build
 
-# Or link for development (no copy)
+# Link for development (loads ./index.ts source directly, no build needed)
 openclaw plugins install -l ./extensions/openclaw
 ```
 
@@ -306,8 +306,9 @@ denied-sdk/
         │   ├── handler.ts       # before_tool_call hook implementation
         │   └── types.ts         # OpenClaw hook types + PluginConfig
         ├── index.ts             # Plugin entrypoint (register function)
+        ├── tsconfig.json        # tsc build config (ESM output to dist/)
         ├── openclaw.plugin.json # Plugin manifest (id, configSchema, uiHints)
-        └── package.json         # Package config (openclaw.extensions entry)
+        └── package.json         # Package config (extensions + runtimeExtensions entries)
 ```
 
 ## Development Workflow
@@ -365,8 +366,9 @@ Configuration is via environment variables (`DENIED_API_KEY`, `DENIED_URL`, `DEN
 **OpenClaw extension**:
 
 - Version is in `extensions/openclaw/package.json`
-- No build step — jiti loads TypeScript directly at runtime
-- Published as `@denied-dev/denied-openclaw-plugin`; `openclaw.extensions` in `package.json` points at `./index.ts`
+- Build with `pnpm run build` (runs `tsc`); emits ESM to `dist/` with type declarations. `prepublishOnly` runs the build automatically
+- Published as `@denied-dev/denied-openclaw-plugin`. `openclaw.runtimeExtensions` points at the compiled `./dist/index.js` (used by registry installs); `openclaw.extensions` keeps `./index.ts` for local source/dev-link installs. `openclaw.compat.pluginApi` pins the minimum OpenClaw host that supports the compiled runtime loader
+- The published package includes `dist` in `files`
 - Install via `openclaw plugins install @denied-dev/denied-openclaw-plugin`
 
 **Claude Code extension**:
