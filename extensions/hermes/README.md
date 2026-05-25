@@ -36,7 +36,18 @@ Create `~/.hermes/denied.json`:
   "timeoutMs": 15000,
   "includeToolInput": true,
   "semanticMapping": true,
-  "subjectId": "session"
+  "subjectId": "session",
+  "includeRawPayloadInContext": true,
+  "redactRawPayloadInContext": true,
+  "contextMaxBytes": 20000,
+  "redactKeys": ["api_key", "apikey", "authorization", "password", "secret", "token"],
+  "audit": {
+    "enabled": false,
+    "dir": "~/.hermes/denied-audit",
+    "includeRawPayload": true,
+    "includeMappedRequest": true,
+    "includeDecision": true
+  }
 }
 ```
 
@@ -57,6 +68,11 @@ Environment variables override values in `denied.json`:
 | `includeToolInput` | -                        | `true`                   | Include raw tool input in the authorization log. |
 | `semanticMapping`  | -                        | `true`                   | Map common tools to file, command, URL, etc.     |
 | `subjectId`        | -                        | `session`                | `session`, `task`, or `tool_call`.               |
+| `includeRawPayloadInContext` | -               | `true`                   | Include the original Hermes hook payload in Denied `context.raw_payload`. |
+| `redactRawPayloadInContext` | -                | `true`                   | Redact sensitive keys before sending raw payload context. |
+| `contextMaxBytes`  | -                        | `20000`                  | Maximum JSON bytes for raw payload context before truncation. |
+| `redactKeys`       | -                        | common secret key names  | Case-insensitive partial key matches to redact recursively. |
+| `audit.enabled`    | -                        | `false`                  | Write local JSONL audit records for raw payload, mapped request, and decision. |
 
 You can also point the hook at a different config file:
 
@@ -166,7 +182,18 @@ The hook maps it to a Denied authorization request:
   "context": {
     "integration": "denied-hermes-shell-hook",
     "hook_event_name": "pre_tool_call",
-    "authz_direction": "agent-to-world"
+    "authz_direction": "agent-to-world",
+    "raw_payload": {
+      "hook_event_name": "pre_tool_call",
+      "tool_name": "terminal",
+      "tool_input": { "command": "ls -la" },
+      "session_id": "sess_abc123",
+      "cwd": "/workspace/project",
+      "extra": {
+        "task_id": "...",
+        "tool_call_id": "..."
+      }
+    }
   }
 }
 ```
@@ -222,6 +249,45 @@ For shell commands, simple command pattern matching is used:
 - `sed -i`, `chmod`, `chown`, etc. -> `update`
 - `rm`, `rmdir`, `unlink` -> `delete`
 - unknown commands -> `execute`
+
+## Raw Payload Context and Audit
+
+For observability, the hook includes the original Hermes hook payload in `request.context.raw_payload` by default. This keeps Denied decision logs useful even when the semantic mapper is imperfect or too conservative.
+
+Sensitive fields are redacted recursively before raw payload or raw tool input is sent to Denied or written to local audit logs. Redaction is based on case-insensitive partial key matching. For example, with the default `redactKeys`, fields such as `token`, `github_token`, `apiKey`, `api_key`, `Authorization`, and `client_secret` are replaced with `[REDACTED]`.
+
+Large raw payloads are truncated after `contextMaxBytes` JSON bytes:
+
+```json
+{
+  "truncated": true,
+  "max_bytes": 20000,
+  "original_bytes": 43122,
+  "preview": "{...}"
+}
+```
+
+Local audit logging can be enabled for deeper mapper analysis:
+
+```json
+{
+  "audit": {
+    "enabled": true,
+    "dir": "~/.hermes/denied-audit",
+    "includeRawPayload": true,
+    "includeMappedRequest": true,
+    "includeDecision": true
+  }
+}
+```
+
+Audit records are appended as JSONL to:
+
+```text
+~/.hermes/denied-audit/denied-hermes-hook.jsonl
+```
+
+Audit output is also redacted with `redactKeys`.
 
 ## Failure Mode
 

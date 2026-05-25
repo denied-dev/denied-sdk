@@ -9,6 +9,15 @@ const path = require("node:path");
 const DEFAULT_DENIED_URL = "https://api.denied.dev";
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_FAIL_MODE = "open"; // "open" | "closed"
+const DEFAULT_CONTEXT_MAX_BYTES = 20_000;
+const DEFAULT_REDACT_KEYS = [
+  "api_key",
+  "apikey",
+  "authorization",
+  "password",
+  "secret",
+  "token",
+];
 const AGENT_HOOKS_DIR = "agent-hooks";
 
 function log(message) {
@@ -112,8 +121,13 @@ function parseInteger(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
 function resolveConfig() {
   const fileConfig = readConfigFile();
+  const auditConfig = asObject(fileConfig.audit);
   return {
     url: process.env.DENIED_URL || fileConfig.url || DEFAULT_DENIED_URL,
     apiKey: process.env.DENIED_API_KEY || fileConfig.apiKey || fileConfig.api_key || "",
@@ -127,6 +141,30 @@ function resolveConfig() {
     includeToolInput: fileConfig.includeToolInput ?? fileConfig.include_tool_input ?? true,
     semanticMapping: fileConfig.semanticMapping ?? fileConfig.semantic_mapping ?? true,
     subjectId: fileConfig.subjectId || fileConfig.subject_id || "session",
+    includeRawPayloadInContext:
+      fileConfig.includeRawPayloadInContext ??
+      fileConfig.include_raw_payload_in_context ??
+      true,
+    redactRawPayloadInContext:
+      fileConfig.redactRawPayloadInContext ??
+      fileConfig.redact_raw_payload_in_context ??
+      true,
+    contextMaxBytes: parseInteger(
+      fileConfig.contextMaxBytes || fileConfig.context_max_bytes,
+      DEFAULT_CONTEXT_MAX_BYTES,
+    ),
+    redactKeys:
+      asArray(fileConfig.redactKeys || fileConfig.redact_keys).length > 0
+        ? asArray(fileConfig.redactKeys || fileConfig.redact_keys)
+        : DEFAULT_REDACT_KEYS,
+    audit: {
+      enabled: auditConfig.enabled === true,
+      dir: expandHome(auditConfig.dir || path.join(hermesDataDir(), "denied-audit")),
+      includeRawPayload: auditConfig.includeRawPayload ?? auditConfig.include_raw_payload ?? true,
+      includeMappedRequest:
+        auditConfig.includeMappedRequest ?? auditConfig.include_mapped_request ?? true,
+      includeDecision: auditConfig.includeDecision ?? auditConfig.include_decision ?? true,
+    },
   };
 }
 
@@ -225,6 +263,48 @@ function firstString(...values) {
   return values.find((value) => typeof value === "string" && value.length > 0);
 }
 
+function isSensitiveKey(key, redactKeys) {
+  const normalized = String(key).toLowerCase().replace(/[^a-z0-9]/g, "");
+  return redactKeys.some((redactKey) => {
+    const candidate = String(redactKey).toLowerCase().replace(/[^a-z0-9]/g, "");
+    return candidate && normalized.includes(candidate);
+  });
+}
+
+function redactValue(value, redactKeys, seen = new WeakSet()) {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactValue(item, redactKeys, seen));
+  }
+
+  if (value && typeof value === "object") {
+    if (seen.has(value)) return "[Circular]";
+    seen.add(value);
+
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nested]) => [
+        key,
+        isSensitiveKey(key, redactKeys)
+          ? "[REDACTED]"
+          : redactValue(nested, redactKeys, seen),
+      ]),
+    );
+  }
+
+  return value;
+}
+
+function truncateJsonValue(value, maxBytes) {
+  const json = JSON.stringify(value);
+  if (Buffer.byteLength(json, "utf-8") <= maxBytes) return value;
+
+  return {
+    truncated: true,
+    max_bytes: maxBytes,
+    original_bytes: Buffer.byteLength(json, "utf-8"),
+    preview: json.slice(0, maxBytes),
+  };
+}
+
 function inferResource(toolName, toolInput, cwd, effect, semanticMapping) {
   if (!semanticMapping) {
     return { type: "tool", id: toolName, capability: "tool.call" };
@@ -292,6 +372,13 @@ function subjectIdFromPayload(payload, mode) {
   return payload.session_id || payload.extra?.task_id || "unknown";
 }
 
+function rawPayloadForContext(payload, config) {
+  const rawPayload = config.redactRawPayloadInContext
+    ? redactValue(payload, config.redactKeys)
+    : payload;
+  return truncateJsonValue(rawPayload, config.contextMaxBytes);
+}
+
 function createCheckRequest(payload, config) {
   const toolName = payload.tool_name || "unknown";
   const toolInput = asObject(payload.tool_input);
@@ -313,9 +400,19 @@ function createCheckRequest(payload, config) {
     tool_call_id: extra.tool_call_id,
     raw_tool: {
       name: toolName,
-      ...(config.includeToolInput ? { input: toolInput } : {}),
+      ...(config.includeToolInput ? { input: redactValue(toolInput, config.redactKeys) } : {}),
     },
   };
+
+  const context = {
+    integration: "denied-hermes-shell-hook",
+    hook_event_name: payload.hook_event_name,
+    authz_direction: "agent-to-world",
+  };
+
+  if (config.includeRawPayloadInContext) {
+    context.raw_payload = rawPayloadForContext(payload, config);
+  }
 
   return {
     subject: {
@@ -341,12 +438,43 @@ function createCheckRequest(payload, config) {
       id: resourceInfo.id,
       properties: resourceProperties,
     },
-    context: {
-      integration: "denied-hermes-shell-hook",
-      hook_event_name: payload.hook_event_name,
-      authz_direction: "agent-to-world",
-    },
+    context,
   };
+}
+
+function appendAuditRecord(payload, request, decision, config) {
+  if (!config.audit.enabled) return;
+
+  try {
+    fs.mkdirSync(config.audit.dir, { recursive: true });
+    const record = {
+      timestamp: new Date().toISOString(),
+    };
+
+    if (config.audit.includeRawPayload) {
+      record.raw_payload = truncateJsonValue(
+        redactValue(payload, config.redactKeys),
+        config.contextMaxBytes,
+      );
+    }
+    if (config.audit.includeMappedRequest) {
+      record.mapped_request = truncateJsonValue(
+        redactValue(request, config.redactKeys),
+        config.contextMaxBytes,
+      );
+    }
+    if (config.audit.includeDecision) {
+      record.decision = redactValue(decision, config.redactKeys);
+    }
+
+    fs.appendFileSync(
+      path.join(config.audit.dir, "denied-hermes-hook.jsonl"),
+      `${JSON.stringify(record)}\n`,
+      "utf-8",
+    );
+  } catch (err) {
+    log(`Failed to write audit record: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 async function checkDenied(request, config) {
@@ -404,6 +532,7 @@ async function main() {
 
   try {
     const result = await checkDenied(request, config);
+    appendAuditRecord(payload, request, result, config);
     const reason =
       result?.context?.reason ||
       (result?.decision === true
@@ -420,6 +549,12 @@ async function main() {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    appendAuditRecord(
+      payload,
+      request,
+      { error: `Failed to reach Denied PDP: ${message}` },
+      config,
+    );
     failSafe(`Failed to reach Denied PDP: ${message}`, config.failMode);
   }
 }
