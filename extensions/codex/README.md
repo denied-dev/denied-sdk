@@ -19,7 +19,7 @@ codex plugin marketplace add denied-dev/denied-sdk
 ### Step 2: Install the plugin
 
 ```bash
-codex plugin install denied-dev-hook
+codex plugin add denied-dev-hook@denied-dev
 ```
 
 ### Step 3: Set your API key
@@ -108,7 +108,7 @@ The Denied dashboard includes an AI policy generator that can read these decisio
 ## Uninstalling
 
 ```bash
-codex plugin uninstall denied-dev-hook
+codex plugin remove denied-dev-hook@denied-dev
 ```
 
 Restart Codex after uninstalling. This removes the plugin and its hooks — no manual cleanup needed.

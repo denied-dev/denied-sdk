@@ -7,10 +7,12 @@
     {
       "name": "denied-dev-hook",
       "source": {
-        "source": "git-subdir",
-        "url": "https://github.com/denied-dev/denied-sdk.git",
-        "path": "./extensions/codex",
-        "ref": "main"
+        "source": "local",
+        "path": "./extensions/codex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
       },
       "category": "Security"
     }
