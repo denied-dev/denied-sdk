@@ -1,0 +1,21 @@
+{
+  "name": "denied-dev-hook",
+  "description": "Enforce authorization before each tool call using Denied.dev",
+  "version": "0.5.2",
+  "author": {
+    "name": "Denied Technologies",
+    "email": "support@denied.dev"
+  },
+  "homepage": "https://denied.dev",
+  "repository": "https://github.com/denied-dev/denied-sdk",
+  "license": "Apache-2.0",
+  "keywords": ["authorization", "security", "policy"],
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Denied",
+    "shortDescription": "Enforce authorization before each tool call",
+    "developerName": "Denied Technologies",
+    "category": "Security",
+    "websiteURL": "https://denied.dev"
+  }
+}

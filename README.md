@@ -11,8 +11,7 @@ Make permission checks with a simple API that follows Authzen Authorization API 
 
 ## Available Extensions
 
-- **[Claude Code](./extensions/claude-code/README.md)**: hook plugin that enforces authorization on every tool call
-- **[OpenClaw](./extensions/openclaw/README.md)**: hook plugin that enforces authorization on every tool call
+Denied integrations are available for **[Claude Code](./extensions/claude-code/README.md)**, **[Codex CLI](./extensions/codex/README.md)**, and **[OpenClaw](./extensions/openclaw/README.md)**. Each integration hooks into tool execution and checks authorization before a tool call runs.
 
 ## License
 
