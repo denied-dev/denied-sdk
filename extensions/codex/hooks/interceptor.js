@@ -19,15 +19,10 @@ const FAIL_MODE = (
 // Helpers
 // ---------------------------------------------------------------------------
 
-function allow(reason) {
-  const out = {
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "allow",
-      permissionDecisionReason: reason,
-    },
-  };
-  process.stdout.write(JSON.stringify(out));
+function allow(_reason) {
+  // Codex CLI rejects `permissionDecision: "allow"` from PreToolUse hooks
+  // (parses but doesn't support it; raises "unsupported permissionDecision:allow").
+  // Per Codex hook docs, exit 0 with no stdout output means "continue normally".
 }
 
 function deny(reason) {
