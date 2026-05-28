@@ -16,39 +16,117 @@ const FAIL_MODE = (
 ).toLowerCase();
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Pure logic (exported for unit testing)
+// ---------------------------------------------------------------------------
+
+// Builds the AuthZEN evaluation request body from the Claude Code hook input.
+
+//   Common input fields:
+//     session_id: Current session identifier
+//     transcript_path: Path to conversation JSON
+//     cwd: Current working directory when the hook is invoked
+//     permission_mode: Current permission mode: "default", "plan", "acceptEdits", "auto", "dontAsk", or "bypassPermissions"
+//     effort: Object with a level field holding the active effort level for the turn: "low", "medium", "high", "xhigh", or "max"
+//     hook_event_name: Name of the event that fired
+//   PreToolUse specific input fields:
+//     tool_name
+//     tool_input
+//     tool_use_id
+
+function buildCheckBody(input) {
+  return {
+    subject: {
+      type: "claude-code",
+      id: input.session_id ?? "unknown",
+      properties: {
+        cwd: input.cwd ?? "unknown",
+        permission_mode: input.permission_mode ?? "unknown",
+      },
+    },
+    action: {
+      name: "execute",
+    },
+    resource: {
+      type: "tool",
+      id: input.tool_name ?? "unknown",
+      properties: {
+        tool_input: input.tool_input || {},
+        tool_use_id: input.tool_use_id || "unknown",
+      },
+    },
+  };
+}
+
+// Maps a PDP response to a decision outcome without performing any I/O.
+// Returns { kind: "allow" | "deny" | "error", reason }.
+function interpretDecision(data) {
+  if (data.decision === true) {
+    return {
+      kind: "allow",
+      reason:
+        data.context?.reason ??
+        "Authorization allowed by Denied policy engine.",
+    };
+  }
+  if (data.decision === false) {
+    return {
+      kind: "deny",
+      reason:
+        data.context?.reason ?? "Authorization denied by Denied policy engine.",
+    };
+  }
+  return {
+    kind: "error",
+    reason: "Unexpected PDP response: missing or invalid 'decision' field.",
+  };
+}
+
+// Resolves a fail-safe outcome based on the configured fail mode.
+// Returns { kind: "allow" | "deny", reason }.
+function resolveFailSafe(failMode, message) {
+  if (failMode === "closed") {
+    return {
+      kind: "deny",
+      reason: `Denied policy engine unavailable and fail-mode is closed. ${message}`,
+    };
+  }
+  return {
+    kind: "allow",
+    reason: `Denied policy engine unavailable and fail-mode is open. ${message}`,
+  };
+}
+
+// Builds the stdout payload Claude Code expects for a permission decision.
+// Claude Code supports both "allow" and "deny" (unlike Codex, which only denies).
+function buildDecisionOutput(permissionDecision, reason) {
+  return {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision,
+      permissionDecisionReason: reason,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// I/O wrappers
 // ---------------------------------------------------------------------------
 
 function allow(reason) {
-  const out = {
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "allow",
-      permissionDecisionReason: reason,
-    },
-  };
-  process.stdout.write(JSON.stringify(out));
+  process.stdout.write(JSON.stringify(buildDecisionOutput("allow", reason)));
 }
 
 function deny(reason) {
-  const out = {
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: reason,
-    },
-  };
-  process.stdout.write(JSON.stringify(out));
+  process.stdout.write(JSON.stringify(buildDecisionOutput("deny", reason)));
 }
 
 function failSafe(message) {
   process.stderr.write(`[denied-dev] ${message}\n`);
-  if (FAIL_MODE === "closed") {
-    deny(
-      `Denied policy engine unavailable and fail-mode is closed. ${message}`,
-    );
+  const outcome = resolveFailSafe(FAIL_MODE, message);
+  if (outcome.kind === "deny") {
+    deny(outcome.reason);
   } else {
-    allow(`Denied policy engine unavailable and fail-mode is open. ${message}`);
+    allow(outcome.reason);
   }
 }
 
@@ -82,40 +160,7 @@ async function main() {
     return;
   }
 
-  // Build AuthZEN evaluation request
-
-  // Common input fields:
-  //  session_id: Current session identifier
-  //  transcript_path: Path to conversation JSON
-  //  cwd: Current working directory when the hook is invoked
-  //  permission_mode: Current permission mode: "default", "plan", "acceptEdits", "dontAsk", or "bypassPermissions"
-  //  hook_event_name: Name of the event that fired
-  // PreToolUse specific input fields:
-  //  tool_name
-  //  tool_input
-  //  tool_use_id
-
-  const body = {
-    subject: {
-      type: "claude-code",
-      id: input.session_id ?? "unknown",
-      properties: {
-        cwd: input.cwd,
-        permission_mode: input.permission_mode,
-      },
-    },
-    action: {
-      name: "execute",
-    },
-    resource: {
-      type: "tool",
-      id: input.tool_name ?? "unknown",
-      properties: {
-        tool_input: input.tool_input || {},
-        tool_use_id: input.tool_use_id || "unknown",
-      },
-    },
-  };
+  const body = buildCheckBody(input);
 
   try {
     const controller = new AbortController();
@@ -141,21 +186,17 @@ async function main() {
     }
 
     const data = await res.json();
+    const outcome = interpretDecision(data);
 
-    if (data.decision === true) {
-      const reason =
-        data.context?.reason ??
-        "Authorization allowed by Denied policy engine.";
-      allow(reason);
-    } else if (data.decision === false) {
-      const reason =
-        data.context?.reason ?? "Authorization denied by Denied policy engine.";
+    if (outcome.kind === "allow") {
+      allow(outcome.reason);
+    } else if (outcome.kind === "deny") {
       process.stderr.write(
         `[denied-dev] Blocked tool call: ${input.tool_name}\n`,
       );
-      deny(reason);
+      deny(outcome.reason);
     } else {
-      failSafe(`Unexpected PDP response: missing or invalid 'decision' field.`);
+      failSafe(outcome.reason);
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -163,6 +204,18 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  failSafe(`Unexpected error: ${err instanceof Error ? err.message : String(err)}`);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    failSafe(
+      `Unexpected error: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  });
+}
+
+module.exports = {
+  buildCheckBody,
+  interpretDecision,
+  resolveFailSafe,
+  buildDecisionOutput,
+  main,
+};
