@@ -346,6 +346,22 @@ The plugin (`extensions/claude-code`) registers a `PreToolUse` hook via Claude C
 
 Configuration is via environment variables (`DENIED_API_KEY`, `DENIED_URL`, `DENIED_FAIL_MODE`) — no build step or runtime dependencies required.
 
+### Codex CLI Extension Design
+
+The plugin (`extensions/codex`) registers a `PreToolUse` hook via Codex's hook system. It is a zero-dependency Node.js script (Node 18+) that reuses the same interceptor pattern as the Claude Code extension. For each tool call:
+
+1. Codex streams the hook context as JSON to stdin (session ID, tool name, tool input, permission mode, cwd, tool use ID)
+2. The interceptor builds an AuthZEN evaluation request with subject `codex/<sessionId>`, action `execute`, and resource `tool/<toolName>` — the subject `type` is `codex` (vs. `claude-code`) so policies can distinguish agents
+3. It sends a POST to the Denied PDP (`/pdp/check`) with the API key in the `X-API-Key` header
+4. If the decision is `false`, the tool call is denied via `hookSpecificOutput.permissionDecision: "deny"` and the reason is returned to the agent
+5. If the Denied server is unreachable, the plugin follows the `DENIED_FAIL_MODE` setting: `open` (default) allows the call, `closed` denies it
+
+Configuration resolves per-setting in the order: environment variable → JSON config file → built-in default (env always wins). The config file lives at `~/.denied/config.json` (override path with `DENIED_CONFIG`) with keys `apiKey`, `url`, `failMode`, `timeoutMs`. The file fallback exists because Codex's own `config.toml` offers no way to set environment variables for hooks (its `[shell_environment_policy]` only applies to model-run shell commands, not hooks) — so without it, a shell `export` would be the only env option and would need re-running every session. The interceptor's `resolveConfigPath`/`loadFileConfig`/`resolveConfig` are pure and unit-tested.
+
+`hooks/hooks.json` resolves the interceptor path via `${PLUGIN_ROOT}` (Codex's canonical env var for installed plugin roots). Codex requires the user to review and trust the hook definition via the `/hooks` command before it will execute on first run.
+
+The Codex marketplace manifest lives at the repo root in `.agents/plugins/marketplace.json` (Codex's preferred path; differs in schema from Claude's `.claude-plugin/marketplace.json` — the two coexist).
+
 ### Publishing
 
 **Python**:
