@@ -35,11 +35,11 @@ Create a config file at `~/.denied/config.json` with your API key:
 That's it — the plugin reads this file on every tool call.
 
 > **Why a file and not just `export DENIED_API_KEY=...`?**
-> This plugin runs as a Codex *hook*. Codex doesn't always hand hooks the same
-> environment variables you have in your terminal — so an `export` you set in
-> your shell often isn't visible to the plugin, and you'd see "No API key found"
-> even though the variable looks set. A config file removes that guesswork: the
-> plugin reads it directly, no matter how or where Codex was launched. Set it
+> `export` works, but it only lives for that shell session — open a new terminal
+> and the key is gone. And unlike most tools, Codex's own config file
+> (`~/.codex/config.toml`) gives you **no way to set environment variables for
+> hooks**, so you can't persist it there either. Without a config file you'd be
+> re-exporting the key every session. `~/.denied/config.json` lets you set it
 > once and forget it.
 
 **Prefer environment variables?** They still work and take precedence over the
@@ -49,8 +49,8 @@ file when both are set — handy for CI or for overriding a single run:
 export DENIED_API_KEY="your-api-key"
 ```
 
-Just be aware of the caveat above: if the variable doesn't reach the plugin, use
-the config file instead.
+Just remember an `export` only lasts for the current shell session; use the
+config file for a persistent setup.
 
 ### Step 4: Trust the hook
 
@@ -127,7 +127,7 @@ The Denied dashboard includes an AI policy generator that can read these decisio
 | `Blocked tool call: <name>`               | Policy denied the tool call          | Working as intended. Create an allow policy in the [Denied dashboard](https://app.denied.dev) if the tool should be permitted. |
 | `Failed to reach Denied PDP: ...`         | Plugin can't reach the Denied server | Check `DENIED_URL` is correct and network connectivity.                                                                        |
 | `HTTP 401` or `403`                       | Invalid or missing API key           | Check `apiKey` in `~/.denied/config.json` or the `DENIED_API_KEY` env var.                                                     |
-| `No API key found`                        | No API key configured                | Add `apiKey` to `~/.denied/config.json` (recommended) or set `DENIED_API_KEY`. Env vars from your shell may not reach the hook. |
+| `No API key found`                        | No API key configured                | Add `apiKey` to `~/.denied/config.json` (recommended), or `export DENIED_API_KEY` in the shell that launches Codex (lasts only for that session). |
 | `Ignoring malformed config file`          | `~/.denied/config.json` isn't valid JSON | Fix the JSON syntax, or delete the file to fall back to env vars/defaults.                                                  |
 | Hook not running, tools execute freely    | Hook not trusted                     | Open `/hooks` in Codex and approve the `denied-dev-hook` `PreToolUse` definition.                                              |
 | No `[denied-dev]` lines, tools run freely | Plugin not loaded                    | Verify the plugin is installed (`codex plugin list`) and restart Codex.                                                        |

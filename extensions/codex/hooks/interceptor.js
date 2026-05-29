@@ -9,12 +9,12 @@ const DEFAULT_URL = "https://api.denied.dev";
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_FAIL_MODE = "open"; // "open" | "closed"
 
-// Codex spawns hooks with the `codex` process environment, NOT the interactive
-// shell environment — so `export DENIED_API_KEY=...` in a terminal is often
-// invisible to the hook. To make this work without depending on shell setup,
-// settings are resolved from (in order): environment variables, then a JSON
-// config file (~/.denied/config.json, override with DENIED_CONFIG), then
-// built-in defaults. Environment variables always win when present.
+// Codex's own config file (config.toml) offers no way to set environment
+// variables for hooks, so an `export` is the only env option and it lasts only
+// for the current shell session. To allow a persistent setup, settings are
+// resolved from (in order): environment variables, then a JSON config file
+// (~/.denied/config.json, override with DENIED_CONFIG), then built-in defaults.
+// Environment variables always win when present.
 
 function resolveConfigPath(env, homedir) {
   if (env.DENIED_CONFIG) {
