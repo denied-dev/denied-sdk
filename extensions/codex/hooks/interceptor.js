@@ -1,19 +1,75 @@
 // Denied SDK – Codex CLI PreToolUse interceptor
 // Zero dependencies. Requires Node.js 18+ (native fetch).
 
-const DENIED_URL = process.env.DENIED_URL || "https://api.denied.dev";
-const DENIED_API_KEY = process.env.DENIED_API_KEY || "";
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 
+const DEFAULT_URL = "https://api.denied.dev";
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_FAIL_MODE = "open"; // "open" | "closed"
 
-const timeoutFromEnv = parseInt(process.env.DENIED_TIMEOUT_MS ?? "");
-const TIMEOUT_MS = Number.isFinite(timeoutFromEnv)
-  ? timeoutFromEnv
-  : DEFAULT_TIMEOUT_MS;
-const FAIL_MODE = (
-  process.env.DENIED_FAIL_MODE || DEFAULT_FAIL_MODE
-).toLowerCase();
+// Codex's own config file (config.toml) offers no way to set environment
+// variables for hooks, so an `export` is the only env option and it lasts only
+// for the current shell session. To allow a persistent setup, settings are
+// resolved from (in order): environment variables, then a JSON config file
+// (~/.denied/config.json, override with DENIED_CONFIG), then built-in defaults.
+// Environment variables always win when present.
+
+function resolveConfigPath(env, homedir) {
+  if (env.DENIED_CONFIG) {
+    return env.DENIED_CONFIG;
+  }
+  return path.join(homedir, ".denied", "config.json");
+}
+
+// Reads and parses the JSON config file. Returns {} when missing or invalid;
+// surfaces a malformed-file warning so silent misconfiguration is debuggable.
+function loadFileConfig(configPath, warn = () => {}) {
+  let raw;
+  try {
+    raw = fs.readFileSync(configPath, "utf-8");
+  } catch {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    warn(`Ignoring malformed config file at ${configPath} (invalid JSON).`);
+    return {};
+  }
+}
+
+// Merges env vars (highest precedence), file config, and defaults into the
+// resolved settings. Pure function — no I/O — for unit testing.
+function resolveConfig(env, fileConfig) {
+  const timeoutFromEnv = parseInt(env.DENIED_TIMEOUT_MS ?? "", 10);
+  const timeoutMs = Number.isFinite(timeoutFromEnv)
+    ? timeoutFromEnv
+    : Number.isFinite(fileConfig.timeoutMs)
+      ? fileConfig.timeoutMs
+      : DEFAULT_TIMEOUT_MS;
+
+  return {
+    url: env.DENIED_URL || fileConfig.url || DEFAULT_URL,
+    apiKey: env.DENIED_API_KEY || fileConfig.apiKey || "",
+    failMode: (
+      env.DENIED_FAIL_MODE ||
+      fileConfig.failMode ||
+      DEFAULT_FAIL_MODE
+    ).toLowerCase(),
+    timeoutMs,
+  };
+}
+
+const CONFIG = resolveConfig(
+  process.env,
+  loadFileConfig(
+    resolveConfigPath(process.env, os.homedir()),
+    (message) => process.stderr.write(`[denied-dev] ${message}\n`),
+  ),
+);
 
 // ---------------------------------------------------------------------------
 // Pure logic (exported for unit testing)
@@ -125,7 +181,7 @@ function deny(reason) {
 
 function failSafe(message) {
   process.stderr.write(`[denied-dev] ${message}\n`);
-  const outcome = resolveFailSafe(FAIL_MODE, message);
+  const outcome = resolveFailSafe(CONFIG.failMode, message);
   if (outcome.kind === "deny") {
     deny(outcome.reason);
   } else {
@@ -150,8 +206,10 @@ async function readStdin() {
 // ---------------------------------------------------------------------------
 
 async function main() {
-  if (!DENIED_API_KEY) {
-    failSafe("DENIED_API_KEY is not set. Skipping authorization check.");
+  if (!CONFIG.apiKey) {
+    failSafe(
+      "No API key found. Set DENIED_API_KEY or add \"apiKey\" to ~/.denied/config.json. Skipping authorization check.",
+    );
     return;
   }
 
@@ -165,23 +223,21 @@ async function main() {
 
   const body = buildCheckBody(input);
 
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CONFIG.timeoutMs);
 
+  try {
     const headers = {
       "Content-Type": "application/json",
-      "X-API-Key": DENIED_API_KEY,
+      "X-API-Key": CONFIG.apiKey,
     };
 
-    const res = await fetch(`${DENIED_URL}/pdp/check`, {
+    const res = await fetch(`${CONFIG.url}/pdp/check`, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-
-    clearTimeout(timer);
 
     if (!res.ok) {
       failSafe(`HTTP ${res.status}: ${await res.text()}`);
@@ -204,6 +260,8 @@ async function main() {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     failSafe(`Failed to reach Denied PDP: ${message}`);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -216,6 +274,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  resolveConfigPath,
+  loadFileConfig,
+  resolveConfig,
   buildCheckBody,
   interpretDecision,
   resolveFailSafe,

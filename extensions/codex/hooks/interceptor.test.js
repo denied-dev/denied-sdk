@@ -4,12 +4,102 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
 const {
+  resolveConfigPath,
+  loadFileConfig,
+  resolveConfig,
   buildCheckBody,
   interpretDecision,
   resolveFailSafe,
   buildDenyOutput,
 } = require("./interceptor.js");
+
+test("resolveConfigPath defaults to ~/.denied/config.json", () => {
+  assert.equal(
+    resolveConfigPath({}, "/home/dev"),
+    path.join("/home/dev", ".denied", "config.json"),
+  );
+});
+
+test("resolveConfigPath honors the DENIED_CONFIG override", () => {
+  assert.equal(
+    resolveConfigPath({ DENIED_CONFIG: "/etc/denied.json" }, "/home/dev"),
+    "/etc/denied.json",
+  );
+});
+
+test("loadFileConfig returns {} when the file is missing", () => {
+  const missing = path.join(os.tmpdir(), `denied-missing-${Date.now()}.json`);
+  assert.deepEqual(loadFileConfig(missing), {});
+});
+
+test("loadFileConfig parses a valid JSON file", () => {
+  const file = path.join(os.tmpdir(), `denied-cfg-${Date.now()}.json`);
+  fs.writeFileSync(file, JSON.stringify({ apiKey: "dn_file", url: "https://f" }));
+  try {
+    assert.deepEqual(loadFileConfig(file), { apiKey: "dn_file", url: "https://f" });
+  } finally {
+    fs.unlinkSync(file);
+  }
+});
+
+test("loadFileConfig warns and returns {} on malformed JSON", () => {
+  const file = path.join(os.tmpdir(), `denied-bad-${Date.now()}.json`);
+  fs.writeFileSync(file, "{ not json");
+  let warned = "";
+  try {
+    assert.deepEqual(loadFileConfig(file, (m) => (warned = m)), {});
+    assert.match(warned, /malformed config file/);
+  } finally {
+    fs.unlinkSync(file);
+  }
+});
+
+test("resolveConfig falls back to defaults with no env or file", () => {
+  assert.deepEqual(resolveConfig({}, {}), {
+    url: "https://api.denied.dev",
+    apiKey: "",
+    failMode: "open",
+    timeoutMs: 15000,
+  });
+});
+
+test("resolveConfig reads values from the file when env is absent", () => {
+  const cfg = resolveConfig(
+    {},
+    { apiKey: "dn_file", url: "https://file", failMode: "CLOSED", timeoutMs: 5000 },
+  );
+  assert.equal(cfg.apiKey, "dn_file");
+  assert.equal(cfg.url, "https://file");
+  assert.equal(cfg.failMode, "closed");
+  assert.equal(cfg.timeoutMs, 5000);
+});
+
+test("resolveConfig lets environment variables override the file", () => {
+  const cfg = resolveConfig(
+    {
+      DENIED_API_KEY: "dn_env",
+      DENIED_URL: "https://env",
+      DENIED_FAIL_MODE: "closed",
+      DENIED_TIMEOUT_MS: "1000",
+    },
+    { apiKey: "dn_file", url: "https://file", failMode: "open", timeoutMs: 5000 },
+  );
+  assert.deepEqual(cfg, {
+    url: "https://env",
+    apiKey: "dn_env",
+    failMode: "closed",
+    timeoutMs: 1000,
+  });
+});
+
+test("resolveConfig ignores a non-numeric DENIED_TIMEOUT_MS and uses the file value", () => {
+  assert.equal(resolveConfig({ DENIED_TIMEOUT_MS: "abc" }, { timeoutMs: 7000 }).timeoutMs, 7000);
+});
 
 test("buildCheckBody maps a full input to an AuthZEN request", () => {
   const body = buildCheckBody({
