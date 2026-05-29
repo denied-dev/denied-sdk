@@ -356,6 +356,8 @@ The plugin (`extensions/codex`) registers a `PreToolUse` hook via Codex's hook s
 4. If the decision is `false`, the tool call is denied via `hookSpecificOutput.permissionDecision: "deny"` and the reason is returned to the agent
 5. If the Denied server is unreachable, the plugin follows the `DENIED_FAIL_MODE` setting: `open` (default) allows the call, `closed` denies it
 
+Configuration resolves per-setting in the order: environment variable → JSON config file → built-in default (env always wins). The config file lives at `~/.denied/config.json` (override path with `DENIED_CONFIG`) with keys `apiKey`, `url`, `failMode`, `timeoutMs`. The file fallback exists because Codex spawns hooks with the `codex` *process* environment, not the interactive shell — so a shell `export` is often invisible to the hook, and Codex's `[shell_environment_policy]` only applies to model-run shell commands, not hooks. The interceptor's `resolveConfigPath`/`loadFileConfig`/`resolveConfig` are pure and unit-tested.
+
 `hooks/hooks.json` resolves the interceptor path via `${PLUGIN_ROOT}` (Codex's canonical env var for installed plugin roots). Codex requires the user to review and trust the hook definition via the `/hooks` command before it will execute on first run.
 
 The Codex marketplace manifest lives at the repo root in `.agents/plugins/marketplace.json` (Codex's preferred path; differs in schema from Claude's `.claude-plugin/marketplace.json` — the two coexist).

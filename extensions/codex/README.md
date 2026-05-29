@@ -24,21 +24,33 @@ codex plugin add denied-dev-hook@denied-dev
 
 ### Step 3: Set your API key
 
-Set your API key as an environment variable:
+Create a config file at `~/.denied/config.json` with your API key:
+
+```json
+{
+  "apiKey": "your-api-key"
+}
+```
+
+That's it — the plugin reads this file on every tool call.
+
+> **Why a file and not just `export DENIED_API_KEY=...`?**
+> This plugin runs as a Codex *hook*. Codex doesn't always hand hooks the same
+> environment variables you have in your terminal — so an `export` you set in
+> your shell often isn't visible to the plugin, and you'd see "No API key found"
+> even though the variable looks set. A config file removes that guesswork: the
+> plugin reads it directly, no matter how or where Codex was launched. Set it
+> once and forget it.
+
+**Prefer environment variables?** They still work and take precedence over the
+file when both are set — handy for CI or for overriding a single run:
 
 ```bash
 export DENIED_API_KEY="your-api-key"
 ```
 
-Alternatively, add the plugin and env config directly in `~/.codex/config.toml`:
-
-```toml
-[plugins."denied-dev-hook@denied-dev"]
-enabled = true
-
-[env]
-DENIED_API_KEY = "your-api-key"
-```
+Just be aware of the caveat above: if the variable doesn't reach the plugin, use
+the config file instead.
 
 ### Step 4: Trust the hook
 
@@ -55,18 +67,32 @@ When a tool call is blocked, Codex will display the denial reason inline. You ca
 
 ## Configuration reference
 
-| Environment variable | Default                  | Description                                                       |
-| -------------------- | ------------------------ | ----------------------------------------------------------------- |
-| `DENIED_API_KEY`     | —                        | Required. API key for the Denied PDP.                             |
-| `DENIED_URL`         | `https://api.denied.dev` | PDP endpoint. Only change for custom deployments.                 |
-| `DENIED_FAIL_MODE`   | `open`                   | `open` = allow on error, `closed` = deny when PDP is unreachable. |
-| `DENIED_TIMEOUT_MS`  | `15000`                  | Timeout in milliseconds.                                          |
+Settings resolve in this order: **environment variable** → **config file** → built-in default. Environment variables always win when present.
+
+| Environment variable | Config file key (`~/.denied/config.json`) | Default                  | Description                                                       |
+| -------------------- | ----------------------------------------- | ------------------------ | ----------------------------------------------------------------- |
+| `DENIED_API_KEY`     | `apiKey`                                   | —                        | Required. API key for the Denied PDP.                             |
+| `DENIED_URL`         | `url`                                      | `https://api.denied.dev` | PDP endpoint. Only change for custom deployments.                 |
+| `DENIED_FAIL_MODE`   | `failMode`                                 | `open`                   | `open` = allow on error, `closed` = deny when PDP is unreachable. |
+| `DENIED_TIMEOUT_MS`  | `timeoutMs`                                | `15000`                  | Timeout in milliseconds.                                          |
+| `DENIED_CONFIG`      | —                                          | `~/.denied/config.json`  | Path to the JSON config file. Set to read config from elsewhere.  |
+
+Example `~/.denied/config.json`:
+
+```json
+{
+  "apiKey": "your-api-key",
+  "url": "https://api.denied.dev",
+  "failMode": "open",
+  "timeoutMs": 15000
+}
+```
 
 ## Default behavior
 
 **Default-deny**: With no policies configured in Denied, every tool call is blocked. This is intentional — you must explicitly define the boundaries for your agent by creating policies in the [Denied dashboard](https://app.denied.dev).
 
-**Fail-open on error**: If the Denied server is unreachable (network issue, server down) or `DENIED_API_KEY` is not set, tool calls are allowed through. This prevents the plugin from completely breaking the agent. Set `DENIED_FAIL_MODE=closed` for stricter enforcement. You'll see log entries like:
+**Fail-open on error**: If the Denied server is unreachable (network issue, server down) or no API key is configured, tool calls are allowed through. This prevents the plugin from completely breaking the agent. Set `DENIED_FAIL_MODE=closed` for stricter enforcement. You'll see log entries like:
 
 ```
 [denied-dev] Failed to reach Denied PDP: fetch failed
@@ -100,8 +126,9 @@ The Denied dashboard includes an AI policy generator that can read these decisio
 | ----------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
 | `Blocked tool call: <name>`               | Policy denied the tool call          | Working as intended. Create an allow policy in the [Denied dashboard](https://app.denied.dev) if the tool should be permitted. |
 | `Failed to reach Denied PDP: ...`         | Plugin can't reach the Denied server | Check `DENIED_URL` is correct and network connectivity.                                                                        |
-| `HTTP 401` or `403`                       | Invalid or missing API key           | Check `DENIED_API_KEY` env var.                                                                                                |
-| `DENIED_API_KEY is not set`               | No API key configured                | Set the `DENIED_API_KEY` environment variable.                                                                                 |
+| `HTTP 401` or `403`                       | Invalid or missing API key           | Check `apiKey` in `~/.denied/config.json` or the `DENIED_API_KEY` env var.                                                     |
+| `No API key found`                        | No API key configured                | Add `apiKey` to `~/.denied/config.json` (recommended) or set `DENIED_API_KEY`. Env vars from your shell may not reach the hook. |
+| `Ignoring malformed config file`          | `~/.denied/config.json` isn't valid JSON | Fix the JSON syntax, or delete the file to fall back to env vars/defaults.                                                  |
 | Hook not running, tools execute freely    | Hook not trusted                     | Open `/hooks` in Codex and approve the `denied-dev-hook` `PreToolUse` definition.                                              |
 | No `[denied-dev]` lines, tools run freely | Plugin not loaded                    | Verify the plugin is installed (`codex plugin list`) and restart Codex.                                                        |
 
