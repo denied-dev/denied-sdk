@@ -34,13 +34,17 @@ Create `~/.hermes/denied.json`:
   "apiKey": "${DENIED_API_KEY}",
   "failMode": "open",
   "timeoutMs": 15000,
-  "includeToolInput": true,
-  "semanticMapping": true,
+  "useSemanticMapping": true,
   "subjectId": "session",
-  "includeRawPayloadInContext": true,
-  "redactRawPayloadInContext": true,
-  "contextMaxBytes": 20000,
-  "redactKeys": ["api_key", "apikey", "authorization", "password", "secret", "token"],
+  "request": {
+    "includeHookPayload": true,
+    "includeToolInput": true,
+    "maxContextBytes": 20000
+  },
+  "redaction": {
+    "enabled": true,
+    "keys": ["api_key", "apikey", "authorization", "password", "secret", "token"]
+  },
   "audit": {
     "enabled": false,
     "dir": "~/.hermes/denied-audit",
@@ -65,13 +69,13 @@ Environment variables override values in `denied.json`:
 | `apiKey`           | `DENIED_API_KEY`         | -                        | API key for the Denied PDP.                      |
 | `failMode`         | `DENIED_FAIL_MODE`       | `open`                   | `open` = allow on PDP errors, `closed` = block.  |
 | `timeoutMs`        | `DENIED_TIMEOUT_MS`      | `15000`                  | PDP timeout in milliseconds.                     |
-| `includeToolInput` | -                        | `true`                   | Include raw tool input in the authorization log. |
-| `semanticMapping`  | -                        | `true`                   | Map common tools to file, command, URL, etc.     |
+| `useSemanticMapping` | -                      | `true`                   | Map common tools to file, command, URL, etc.     |
 | `subjectId`        | -                        | `session`                | `session`, `task`, or `tool_call`.               |
-| `includeRawPayloadInContext` | -               | `true`                   | Include the original Hermes hook payload in Denied `context.raw_payload`. |
-| `redactRawPayloadInContext` | -                | `true`                   | Redact sensitive keys before sending raw payload context. |
-| `contextMaxBytes`  | -                        | `20000`                  | Maximum JSON bytes for raw payload context before truncation. |
-| `redactKeys`       | -                        | common secret key names  | Case-insensitive partial key matches to redact recursively. |
+| `request.includeHookPayload` | -               | `true`                   | Include the original Hermes hook payload in Denied `context.raw_payload`. |
+| `request.includeToolInput` | -                 | `true`                   | Include raw tool input in the authorization request. |
+| `request.maxContextBytes` | -                  | `20000`                  | Maximum JSON bytes for raw payload context before truncation. |
+| `redaction.enabled` | -                       | `true`                   | Redact sensitive fields before sending requests or writing audit logs. |
+| `redaction.keys`   | -                        | common secret key names  | Case-insensitive partial key matches to redact recursively. |
 | `audit.enabled`    | -                        | `false`                  | Write local JSONL audit records for raw payload, mapped request, and decision. |
 
 You can also point the hook at a different config file:
@@ -231,7 +235,7 @@ Hermes only uses `pre_tool_call` output to block a call; non-blocking fields are
 
 ## Semantic Mapping
 
-The hook always includes the raw Hermes tool name and input. `action.name` represents the agent behavior or tool-level operation, while `action.properties.effect` carries the normalized low-level effect (`read`, `create`, `update`, `delete`, or `execute`). When `semanticMapping` is enabled, the hook also maps common tool calls into more policy-friendly resources:
+The hook always includes the raw Hermes tool name. When `request.includeToolInput` is enabled, it also includes the raw tool input. `action.name` represents the agent behavior or tool-level operation, while `action.properties.effect` carries the normalized low-level effect (`read`, `create`, `update`, `delete`, or `execute`). When `useSemanticMapping` is enabled, the hook also maps common tool calls into more policy-friendly resources:
 
 | Hermes tool shape              | Action name                              | Effect inference              | Resource mapping              |
 | ------------------------------ | ---------------------------------------- | ----------------------------- | ----------------------------- |
@@ -254,9 +258,9 @@ For shell commands, simple command pattern matching is used:
 
 For observability, the hook includes the original Hermes hook payload in `request.context.raw_payload` by default. This keeps Denied decision logs useful even when the semantic mapper is imperfect or too conservative.
 
-Sensitive fields are redacted recursively before raw payload or raw tool input is sent to Denied or written to local audit logs. Redaction is based on case-insensitive partial key matching. For example, with the default `redactKeys`, fields such as `token`, `github_token`, `apiKey`, `api_key`, `Authorization`, and `client_secret` are replaced with `[REDACTED]`.
+Sensitive fields are redacted recursively before raw payload or raw tool input is sent to Denied or written to local audit logs. Redaction is based on case-insensitive partial key matching. For example, with the default `redaction.keys`, fields such as `token`, `github_token`, `apiKey`, `api_key`, `Authorization`, and `client_secret` are replaced with `[REDACTED]`.
 
-Large raw payloads are truncated after `contextMaxBytes` JSON bytes:
+Large raw payloads are truncated after `request.maxContextBytes` JSON bytes:
 
 ```json
 {
@@ -287,7 +291,7 @@ Audit records are appended as JSONL to:
 ~/.hermes/denied-audit/denied-hermes-hook.jsonl
 ```
 
-Audit output is also redacted with `redactKeys`.
+Audit output is also controlled by `redaction.enabled` and `redaction.keys`.
 
 ## Failure Mode
 

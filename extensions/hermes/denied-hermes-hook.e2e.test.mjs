@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { Readable } from "node:stream";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -12,10 +13,11 @@ const unusedConfigPath = path.join(
   `denied-hermes-missing-${process.pid}.json`,
 );
 
-async function runHook(payload, env, fetchResult) {
+async function runHook(payload, env, fetchResult, config) {
   let stdout = "";
   let stderr = "";
   const requests = [];
+  let configPath;
   const fetchMock = async (url, init = {}) => {
     if (fetchResult instanceof Error) {
       throw fetchResult;
@@ -43,9 +45,19 @@ async function runHook(payload, env, fetchResult) {
 
   const stdinDescriptor = Object.getOwnPropertyDescriptor(process, "stdin");
   const originalFetch = globalThis.fetch;
+  if (config) {
+    configPath = path.join(
+      os.tmpdir(),
+      `denied-hermes-config-${process.pid}-${Date.now()}-${Math.random()
+        .toString(16)
+        .slice(2)}.json`,
+    );
+    await fs.writeFile(configPath, JSON.stringify(config), "utf-8");
+  }
+
   const envValues = {
-    DENIED_CONFIG: unusedConfigPath,
-    DENIED_HERMES_CONFIG: unusedConfigPath,
+    DENIED_CONFIG: configPath || unusedConfigPath,
+    DENIED_HERMES_CONFIG: configPath || unusedConfigPath,
     ...env,
   };
   const originalEnvValues = Object.fromEntries(
@@ -86,6 +98,9 @@ async function runHook(payload, env, fetchResult) {
       } else {
         process.env[key] = value;
       }
+    }
+    if (configPath) {
+      await fs.rm(configPath, { force: true });
     }
   }
 
@@ -269,5 +284,117 @@ describe("Hermes Denied hook e2e", () => {
       message: "Denied Hermes hook only enforces pre_tool_call events.",
     });
     expect(result.requests).toEqual([]);
+  });
+
+  it("honors request config for hook payload and tool input", async () => {
+    const result = await runHook(
+      {
+        hook_event_name: "pre_tool_call",
+        tool_name: "terminal",
+        tool_input: { command: "ls -la", github_token: "secret-token" },
+        session_id: "sess-5",
+      },
+      {},
+      { body: { decision: true } },
+      {
+        url: "https://pdp.test",
+        apiKey: "test-api-key",
+        request: {
+          includeHookPayload: false,
+          includeToolInput: false,
+        },
+      },
+    );
+
+    expect(result.requests[0].body.context).not.toHaveProperty("raw_payload");
+    expect(result.requests[0].body.resource.properties.raw_tool).toEqual({
+      name: "terminal",
+    });
+  });
+
+  it("honors redaction.enabled false", async () => {
+    const result = await runHook(
+      {
+        hook_event_name: "pre_tool_call",
+        tool_name: "terminal",
+        tool_input: { command: "ls -la", github_token: "secret-token" },
+        session_id: "sess-6",
+      },
+      {},
+      { body: { decision: true } },
+      {
+        url: "https://pdp.test",
+        apiKey: "test-api-key",
+        redaction: {
+          enabled: false,
+        },
+      },
+    );
+
+    expect(result.requests[0].body).toHaveProperty(
+      "resource.properties.raw_tool.input.github_token",
+      "secret-token",
+    );
+    expect(result.requests[0].body).toHaveProperty(
+      "context.raw_payload.tool_input.github_token",
+      "secret-token",
+    );
+  });
+
+  it("uses generic tool resources when semantic mapping is disabled", async () => {
+    const result = await runHook(
+      {
+        hook_event_name: "pre_tool_call",
+        tool_name: "terminal",
+        tool_input: { command: "ls -la" },
+        session_id: "sess-7",
+      },
+      {},
+      { body: { decision: true } },
+      {
+        url: "https://pdp.test",
+        apiKey: "test-api-key",
+        useSemanticMapping: false,
+      },
+    );
+
+    expect(result.requests[0].body).toMatchObject({
+      action: {
+        name: "run_command",
+        properties: {
+          effect: "read",
+          capability: "tool.call",
+        },
+      },
+      resource: {
+        type: "tool",
+        id: "terminal",
+      },
+    });
+    expect(result.requests[0].body.resource.properties).not.toHaveProperty("command");
+  });
+
+  it.each([
+    ["task", "task-8"],
+    ["tool_call", "tool-8"],
+  ])("uses %s as the subject id when configured", async (subjectId, expectedId) => {
+    const result = await runHook(
+      {
+        hook_event_name: "pre_tool_call",
+        tool_name: "terminal",
+        tool_input: { command: "ls -la" },
+        session_id: "sess-8",
+        extra: { task_id: "task-8", tool_call_id: "tool-8" },
+      },
+      {},
+      { body: { decision: true } },
+      {
+        url: "https://pdp.test",
+        apiKey: "test-api-key",
+        subjectId,
+      },
+    );
+
+    expect(result.requests[0].body.subject.id).toBe(expectedId);
   });
 });

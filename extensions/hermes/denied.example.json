@@ -3,20 +3,24 @@
   "apiKey": "${DENIED_API_KEY}",
   "failMode": "open",
   "timeoutMs": 15000,
-  "includeToolInput": true,
-  "semanticMapping": true,
+  "useSemanticMapping": true,
   "subjectId": "session",
-  "includeRawPayloadInContext": true,
-  "redactRawPayloadInContext": true,
-  "contextMaxBytes": 20000,
-  "redactKeys": [
-    "api_key",
-    "apikey",
-    "authorization",
-    "password",
-    "secret",
-    "token"
-  ],
+  "request": {
+    "includeHookPayload": true,
+    "includeToolInput": true,
+    "maxContextBytes": 20000
+  },
+  "redaction": {
+    "enabled": true,
+    "keys": [
+      "api_key",
+      "apikey",
+      "authorization",
+      "password",
+      "secret",
+      "token"
+    ]
+  },
   "audit": {
     "enabled": false,
     "dir": "~/.hermes/denied-audit",

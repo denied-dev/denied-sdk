@@ -127,43 +127,36 @@ function asArray(value) {
 
 function resolveConfig() {
   const fileConfig = readConfigFile();
+  const requestConfig = asObject(fileConfig.request);
+  const redactionConfig = asObject(fileConfig.redaction);
   const auditConfig = asObject(fileConfig.audit);
+  const redactionKeys = asArray(redactionConfig.keys);
   return {
     url: process.env.DENIED_URL || fileConfig.url || DEFAULT_DENIED_URL,
-    apiKey: process.env.DENIED_API_KEY || fileConfig.apiKey || fileConfig.api_key || "",
+    apiKey: process.env.DENIED_API_KEY || fileConfig.apiKey || "",
     failMode: String(
-      process.env.DENIED_FAIL_MODE || fileConfig.failMode || fileConfig.fail_mode || DEFAULT_FAIL_MODE,
+      process.env.DENIED_FAIL_MODE || fileConfig.failMode || DEFAULT_FAIL_MODE,
     ).toLowerCase(),
     timeoutMs: parseInteger(
-      process.env.DENIED_TIMEOUT_MS || fileConfig.timeoutMs || fileConfig.timeout_ms,
+      process.env.DENIED_TIMEOUT_MS || fileConfig.timeoutMs,
       DEFAULT_TIMEOUT_MS,
     ),
-    includeToolInput: fileConfig.includeToolInput ?? fileConfig.include_tool_input ?? true,
-    semanticMapping: fileConfig.semanticMapping ?? fileConfig.semantic_mapping ?? true,
-    subjectId: fileConfig.subjectId || fileConfig.subject_id || "session",
-    includeRawPayloadInContext:
-      fileConfig.includeRawPayloadInContext ??
-      fileConfig.include_raw_payload_in_context ??
-      true,
-    redactRawPayloadInContext:
-      fileConfig.redactRawPayloadInContext ??
-      fileConfig.redact_raw_payload_in_context ??
-      true,
-    contextMaxBytes: parseInteger(
-      fileConfig.contextMaxBytes || fileConfig.context_max_bytes,
+    includeToolInput: requestConfig.includeToolInput ?? true,
+    useSemanticMapping: fileConfig.useSemanticMapping ?? true,
+    subjectId: fileConfig.subjectId || "session",
+    includeHookPayload: requestConfig.includeHookPayload ?? true,
+    redactionEnabled: redactionConfig.enabled ?? true,
+    maxContextBytes: parseInteger(
+      requestConfig.maxContextBytes,
       DEFAULT_CONTEXT_MAX_BYTES,
     ),
-    redactKeys:
-      asArray(fileConfig.redactKeys || fileConfig.redact_keys).length > 0
-        ? asArray(fileConfig.redactKeys || fileConfig.redact_keys)
-        : DEFAULT_REDACT_KEYS,
+    redactKeys: redactionKeys.length > 0 ? redactionKeys : DEFAULT_REDACT_KEYS,
     audit: {
       enabled: auditConfig.enabled === true,
       dir: expandHome(auditConfig.dir || path.join(hermesDataDir(), "denied-audit")),
-      includeRawPayload: auditConfig.includeRawPayload ?? auditConfig.include_raw_payload ?? true,
-      includeMappedRequest:
-        auditConfig.includeMappedRequest ?? auditConfig.include_mapped_request ?? true,
-      includeDecision: auditConfig.includeDecision ?? auditConfig.include_decision ?? true,
+      includeRawPayload: auditConfig.includeRawPayload ?? true,
+      includeMappedRequest: auditConfig.includeMappedRequest ?? true,
+      includeDecision: auditConfig.includeDecision ?? true,
     },
   };
 }
@@ -305,8 +298,8 @@ function truncateJsonValue(value, maxBytes) {
   };
 }
 
-function inferResource(toolName, toolInput, cwd, effect, semanticMapping) {
-  if (!semanticMapping) {
+function inferResource(toolName, toolInput, cwd, effect, useSemanticMapping) {
+  if (!useSemanticMapping) {
     return { type: "tool", id: toolName, capability: "tool.call" };
   }
 
@@ -373,10 +366,14 @@ function subjectIdFromPayload(payload, mode) {
 }
 
 function rawPayloadForContext(payload, config) {
-  const rawPayload = config.redactRawPayloadInContext
+  const rawPayload = config.redactionEnabled
     ? redactValue(payload, config.redactKeys)
     : payload;
-  return truncateJsonValue(rawPayload, config.contextMaxBytes);
+  return truncateJsonValue(rawPayload, config.maxContextBytes);
+}
+
+function redactIfEnabled(value, config) {
+  return config.redactionEnabled ? redactValue(value, config.redactKeys) : value;
 }
 
 function createCheckRequest(payload, config) {
@@ -391,7 +388,7 @@ function createCheckRequest(payload, config) {
     toolInput,
     cwd,
     effect,
-    config.semanticMapping,
+    config.useSemanticMapping,
   );
 
   const resourceProperties = {
@@ -400,7 +397,7 @@ function createCheckRequest(payload, config) {
     tool_call_id: extra.tool_call_id,
     raw_tool: {
       name: toolName,
-      ...(config.includeToolInput ? { input: redactValue(toolInput, config.redactKeys) } : {}),
+      ...(config.includeToolInput ? { input: redactIfEnabled(toolInput, config) } : {}),
     },
   };
 
@@ -410,7 +407,7 @@ function createCheckRequest(payload, config) {
     authz_direction: "agent-to-world",
   };
 
-  if (config.includeRawPayloadInContext) {
+  if (config.includeHookPayload) {
     context.raw_payload = rawPayloadForContext(payload, config);
   }
 
@@ -453,18 +450,18 @@ function appendAuditRecord(payload, request, decision, config) {
 
     if (config.audit.includeRawPayload) {
       record.raw_payload = truncateJsonValue(
-        redactValue(payload, config.redactKeys),
-        config.contextMaxBytes,
+        redactIfEnabled(payload, config),
+        config.maxContextBytes,
       );
     }
     if (config.audit.includeMappedRequest) {
       record.mapped_request = truncateJsonValue(
-        redactValue(request, config.redactKeys),
-        config.contextMaxBytes,
+        redactIfEnabled(request, config),
+        config.maxContextBytes,
       );
     }
     if (config.audit.includeDecision) {
-      record.decision = redactValue(decision, config.redactKeys);
+      record.decision = redactIfEnabled(decision, config);
     }
 
     fs.appendFileSync(
