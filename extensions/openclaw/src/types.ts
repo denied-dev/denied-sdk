@@ -23,3 +23,15 @@ export type DeniedPluginConfig = {
   failMode?: "open" | "closed";
   timeout?: number;
 };
+
+export type PluginRegisterApi = {
+  pluginConfig?: DeniedPluginConfig;
+  on: (
+    event: "before_tool_call",
+    handler: (
+      event: PluginHookBeforeToolCallEvent,
+      ctx: PluginHookToolContext,
+    ) => Promise<PluginHookBeforeToolCallResult | void>,
+    options?: { priority?: number },
+  ) => void;
+};

@@ -5,9 +5,7 @@ import {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookToolContext,
-} from "./types";
-
-declare const process: { env: Record<string, string | undefined> };
+} from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_FAIL_MODE = "open";
