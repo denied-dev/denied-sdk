@@ -6,6 +6,8 @@ settings:
 
 importers:
 
+  extensions/hermes: {}
+
   extensions/openclaw:
     dependencies:
       '@denied-dev/sdk':

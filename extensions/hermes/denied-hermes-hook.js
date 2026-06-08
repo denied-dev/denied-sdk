@@ -559,6 +559,15 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  failSafe(`Unexpected error: ${err instanceof Error ? err.message : String(err)}`, DEFAULT_FAIL_MODE);
-});
+module.exports = {
+  main,
+};
+
+if (require.main === module) {
+  main().catch((err) => {
+    failSafe(
+      `Unexpected error: ${err instanceof Error ? err.message : String(err)}`,
+      DEFAULT_FAIL_MODE,
+    );
+  });
+}
