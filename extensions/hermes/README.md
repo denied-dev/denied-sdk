@@ -1,109 +1,98 @@
-# Denied SDK Hook for Hermes Agent
+# Denied Hermes Plugin
 
-Hermes Agent can execute shell commands, file operations, web requests, plugin tools, and other capabilities. [Denied](https://denied.dev) defines the boundaries of what Hermes may do: before every tool executes, this hook checks with the Denied authorization server whether the tool call is permitted. If the policy says no, the tool call is blocked and the denial reason is returned to Hermes.
+Denied checks Hermes Agent tool calls before they execute. If policy denies a
+call, Hermes receives a native block response and the tool does not run.
 
-This MVP is implemented as a Hermes shell hook. It is a single zero-dependency Node.js script that reads Hermes hook payloads from stdin, sends a Denied `/pdp/check` request, and writes the Hermes hook decision to stdout.
+## Quick Install
 
-## Prerequisites
-
-- A running Hermes Agent gateway or CLI
-- Node.js 18+ available where Hermes executes shell hooks
-- A Denied account and API key. Sign up at [app.denied.dev](https://app.denied.dev)
-
-## Quickstart
-
-Install with your preferred JavaScript package manager:
+Until the plugin is published as a standalone Hermes plugin repository, install
+it from this monorepo by cloning the repo and copying the `extensions/hermes`
+plugin directory into Hermes.
 
 ```bash
-npx @denied-dev/denied-hermes-hook install
+tmp_dir="$(mktemp -d)"
+hermes_home="${HERMES_HOME:-$HOME/.hermes}"
+git clone --depth 1 https://github.com/denied-dev/denied-sdk.git "$tmp_dir/denied-sdk"
+
+uv pip install --python "$hermes_home/hermes-agent/venv/bin/python" -e "$tmp_dir/denied-sdk/python"
+uv pip install --python "$hermes_home/hermes-agent/venv/bin/python" -e "$tmp_dir/denied-sdk/extensions/hermes"
+
+rm -rf "$hermes_home/plugins/denied"
+mkdir -p "$hermes_home/plugins/denied/src"
+cp "$tmp_dir/denied-sdk/extensions/hermes/__init__.py" \
+  "$tmp_dir/denied-sdk/extensions/hermes/plugin.yaml" \
+  "$tmp_dir/denied-sdk/extensions/hermes/README.md" \
+  "$tmp_dir/denied-sdk/extensions/hermes/pyproject.toml" \
+  "$hermes_home/plugins/denied/"
+cp -R "$tmp_dir/denied-sdk/extensions/hermes/src/denied_hermes" \
+  "$hermes_home/plugins/denied/src/"
+
+hermes plugins enable denied
+rm -rf "$tmp_dir"
 ```
+
+Restart Hermes or start a new Hermes session after enabling the plugin.
+For non-default Hermes profiles, export `HERMES_HOME` before running the install
+commands and before starting Hermes.
+
+Verify installation:
 
 ```bash
-pnpm dlx @denied-dev/denied-hermes-hook install
+hermes plugins list | rg denied
 ```
+
+Expected status:
+
+```text
+denied    enabled
+```
+
+## Future Direct Git Install
+
+Hermes can install plugins directly from Git when `plugin.yaml` is at the
+repository root:
 
 ```bash
-yarn dlx @denied-dev/denied-hermes-hook install
+hermes plugins install owner/repo --enable
 ```
+
+When this plugin is published as a dedicated repository, the install command
+will be:
 
 ```bash
-bunx @denied-dev/denied-hermes-hook install
+hermes plugins install denied-dev/denied-hermes-plugin --enable
 ```
 
-The installer prompts for your Denied API key, then:
+The plugin manifest declares `pip_dependencies: ["denied-sdk>=0.5.2"]`, and
+the Python package also declares `denied-sdk` as a runtime dependency. The plugin
+does not import `denied_sdk` at discovery time; it imports the SDK only when the
+authorization hook is constructed or maps a tool call. This follows Hermes'
+dependency-loading guidance and avoids disabling plugin discovery just because a
+dependency has not been installed yet.
 
-- copies the hook to `~/.hermes/agent-hooks/denied-hermes-hook.js`
-- creates or updates `~/.hermes/denied.json`
-- merges the Denied hook into `~/.hermes/config.yaml`
-- sets `hooks_auto_accept: true` so Hermes can run hooks in non-interactive sessions
-- creates timestamped backups before changing existing files
+Do not use `hermes plugins install denied-dev/denied-sdk --enable` for the
+current monorepo layout. Hermes will clone the repository root, not the
+`extensions/hermes` subdirectory.
 
-Restart Hermes after installation if it is already running.
+## Configure
 
-## Installer CLI
-
-The package executable is the installer CLI:
+At minimum, provide a Denied API key to the Hermes process:
 
 ```bash
-npx @denied-dev/denied-hermes-hook <command> [options]
+export DENIED_API_KEY="your-api-key"
 ```
 
-Commands:
+Optional environment variables:
 
-| Command | Description |
-| ------- | ----------- |
-| `install` | Install or update the hook file, Denied config, and Hermes hook registration. |
-| `status` | Show whether the hook file, Denied config, Hermes config, hook registration, and API key are present. |
-| `update` | Replace the installed hook script with the version from the current package. Leaves config files unchanged. |
-| `uninstall` | Remove the Denied hook registration and installed hook file. Leaves `denied.json` in place. |
+| Variable | Default | Description |
+| --- | --- | --- |
+| `DENIED_URL` | `https://api.denied.dev` | Denied PDP base URL. |
+| `DENIED_FAIL_MODE` | `open` | `open` allows tool calls on Denied errors; `closed` blocks them. |
+| `DENIED_TIMEOUT_MS` | `15000` | Denied request timeout in milliseconds. |
+| `DENIED_CONFIG` | - | Path to a JSON config file. |
 
-Useful options:
-
-| Option | Description |
-| ------ | ----------- |
-| `--data-dir <path>` | Hermes data directory. Defaults to `~/.hermes`. |
-| `--api-key <key>` | Store this Denied API key in `denied.json` without prompting. |
-| `--url <url>` | Denied PDP URL. Defaults to `https://api.denied.dev`. |
-| `--fail-mode <open\|closed>` | Fail-open or fail-closed behavior when Denied is unavailable. Defaults to `open`. |
-| `--timeout-ms <number>` | PDP request timeout. Defaults to `15000`. |
-| `--yes` | Use non-interactive defaults. If no API key is provided, writes `${DENIED_API_KEY}`. |
-| `--dry-run` | Print planned changes without writing files. |
-| `--no-auto-accept` | Do not set `hooks_auto_accept: true`. |
-
-Examples:
-
-```bash
-npx @denied-dev/denied-hermes-hook status
-```
-
-```bash
-npx @denied-dev/denied-hermes-hook install \
-  --api-key "your-api-key" \
-  --fail-mode closed \
-  --yes
-```
-
-```bash
-npx @denied-dev/denied-hermes-hook install --dry-run --yes
-```
-
-```bash
-npx @denied-dev/denied-hermes-hook update
-```
-
-```bash
-npx @denied-dev/denied-hermes-hook uninstall
-```
-
-For Docker deployments using the upstream Hermes layout, `~/.hermes` on the host is mounted into the container as `/opt/data`. Target that directory explicitly:
-
-```bash
-npx @denied-dev/denied-hermes-hook install --data-dir /opt/data
-```
-
-## Configuration
-
-The installer writes `~/.hermes/denied.json`. You can edit it manually after install:
+You can also configure the plugin with `$HERMES_HOME/denied.json`. If
+`HERMES_HOME` is not set, Hermes uses the default profile at `~/.hermes`:
 
 ```json
 {
@@ -124,7 +113,6 @@ The installer writes `~/.hermes/denied.json`. You can edit it manually after ins
   },
   "audit": {
     "enabled": false,
-    "dir": "~/.hermes/denied-audit",
     "includeRawPayload": true,
     "includeMappedRequest": true,
     "includeDecision": true
@@ -132,300 +120,36 @@ The installer writes `~/.hermes/denied.json`. You can edit it manually after ins
 }
 ```
 
-To keep secrets out of the config file, use non-interactive install without `--api-key`:
+Environment variables override values in `denied.json`.
+
+Config lookup order:
+
+1. Environment variables.
+2. `DENIED_CONFIG`.
+3. `$HERMES_HOME/denied.json` (usually `~/.hermes/denied.json`).
+4. `/opt/data/denied.json`.
+5. Built-in defaults.
+
+## Recommended Fail Mode
+
+Use `closed` when Denied should be a hard enforcement boundary:
 
 ```bash
-npx @denied-dev/denied-hermes-hook install --yes
+export DENIED_FAIL_MODE="closed"
 ```
 
-This writes `"apiKey": "${DENIED_API_KEY}"`. Then set the API key in the Hermes environment:
+With fail-closed mode, Hermes blocks tool calls if Denied is unavailable or
+configuration is invalid. With fail-open mode, Hermes allows tool calls when
+Denied cannot be reached.
 
-```bash
-export DENIED_API_KEY="your-api-key"
-```
+## Audit Logs
 
-Environment variables override values in `denied.json`:
-
-| Config key         | Environment variable     | Default                  | Description                                      |
-| ------------------ | ------------------------ | ------------------------ | ------------------------------------------------ |
-| `url`              | `DENIED_URL`             | `https://api.denied.dev` | PDP endpoint.                                    |
-| `apiKey`           | `DENIED_API_KEY`         | -                        | API key for the Denied PDP.                      |
-| `failMode`         | `DENIED_FAIL_MODE`       | `open`                   | `open` = allow on PDP errors, `closed` = block.  |
-| `timeoutMs`        | `DENIED_TIMEOUT_MS`      | `15000`                  | PDP timeout in milliseconds.                     |
-| `useSemanticMapping` | -                      | `true`                   | Map common tools to file, command, URL, etc.     |
-| `subjectId`        | -                        | `session`                | `session`, `task`, or `tool_call`.               |
-| `request.includeHookPayload` | -               | `true`                   | Include the original Hermes hook payload in Denied `context.hook_payload`. |
-| `request.includeToolInput` | -                 | `true`                   | Include raw tool input in the authorization request. |
-| `request.maxContextBytes` | -                  | `20000`                  | Maximum JSON bytes for raw payload context before truncation. |
-| `redaction.enabled` | -                       | `true`                   | Redact sensitive fields before sending requests or writing audit logs. |
-| `redaction.keys`   | -                        | common secret key names  | Case-insensitive partial key matches to redact recursively. |
-| `audit.enabled`    | -                        | `false`                  | Write local JSONL audit records for raw payload, mapped request, and decision. |
-
-You can also point the hook at a different config file:
-
-```bash
-export DENIED_CONFIG="/path/to/denied.json"
-```
-
-## Hermes Hook Registration
-
-The installer updates `~/.hermes/config.yaml` automatically. A typical installed entry looks like this:
-
-```yaml
-hooks:
-  pre_tool_call:
-    - matcher: ".*"
-      command: "node /Users/alice/.hermes/agent-hooks/denied-hermes-hook.js"
-      timeout: 15
-
-hooks_auto_accept: true
-```
-
-Use `status` to verify the installed registration:
-
-```bash
-npx @denied-dev/denied-hermes-hook status
-```
-
-## Manual Install Fallback
-
-If you cannot use a package manager, copy `denied-hermes-hook.js` into your Hermes data directory:
-
-```bash
-mkdir -p ~/.hermes/agent-hooks
-cp denied-hermes-hook.js ~/.hermes/agent-hooks/denied-hermes-hook.js
-chmod +x ~/.hermes/agent-hooks/denied-hermes-hook.js
-```
-
-Add this to `~/.hermes/config.yaml`:
-
-```yaml
-hooks:
-  pre_tool_call:
-    - matcher: ".*"
-      command: "node ~/.hermes/agent-hooks/denied-hermes-hook.js"
-      timeout: 15
-
-hooks_auto_accept: true
-```
-
-Then create `~/.hermes/denied.json` using the configuration example above.
-
-## Docker Environment
-
-For Docker, pass the Denied environment variables to the Hermes container:
-
-```yaml
-services:
-  hermes:
-    environment:
-      - HERMES_DASHBOARD=1
-      - HERMES_ACCEPT_HOOKS=1
-      - DENIED_API_KEY=your-api-key
-      - DENIED_URL=https://api.denied.dev
-      - DENIED_FAIL_MODE=open
-```
-
-Restart Hermes after changing hook configuration:
-
-```bash
-docker compose restart hermes
-```
-
-## Local Installer Testing
-
-To test the installer without touching your real Hermes config, use a temporary data directory:
-
-```bash
-TEST_HERMES_DIR="$(mktemp -d)"
-
-npx @denied-dev/denied-hermes-hook install \
-  --data-dir "$TEST_HERMES_DIR" \
-  --api-key "test-api-key" \
-  --yes
-```
-
-Inspect the result:
-
-```bash
-find "$TEST_HERMES_DIR" -maxdepth 3 -type f -print
-cat "$TEST_HERMES_DIR/config.yaml"
-cat "$TEST_HERMES_DIR/denied.json"
-```
-
-For local package tarball testing before publishing:
-
-```bash
-pnpm --dir extensions/hermes pack --pack-destination /tmp
-
-TEST_HERMES_DIR="$(mktemp -d)"
-
-npx --yes \
-  --package /tmp/denied-dev-denied-hermes-hook-0.5.2.tgz \
-  denied-hermes-hook install \
-  --data-dir "$TEST_HERMES_DIR" \
-  --api-key "test-api-key" \
-  --yes
-```
-
-The direct `npx /tmp/package.tgz install` form does not work because it tries to execute the tarball file itself.
-
-Automated tests:
-
-```bash
-pnpm --dir extensions/hermes test
-```
-
-## How It Works
-
-Hermes sends a JSON payload to the hook before every tool call:
-
-```json
-{
-  "hook_event_name": "pre_tool_call",
-  "tool_name": "terminal",
-  "tool_input": { "command": "ls -la" },
-  "session_id": "sess_abc123",
-  "cwd": "/workspace/project",
-  "extra": {
-    "task_id": "...",
-    "tool_call_id": "..."
-  }
-}
-```
-
-The hook maps it to a Denied authorization request:
-
-```json
-{
-  "subject": {
-    "type": "hermes-agent",
-    "id": "sess_abc123",
-    "properties": {
-      "runtime": "hermes-agent",
-      "session_id": "sess_abc123",
-      "task_id": "...",
-      "cwd": "/workspace/project"
-    }
-  },
-  "action": {
-    "name": "run_command",
-    "properties": {
-      "effect": "read",
-      "tool_name": "terminal",
-      "capability": "shell.command"
-    }
-  },
-  "resource": {
-    "type": "command",
-    "id": "ls",
-    "properties": {
-      "command": "ls -la",
-      "tool_name": "terminal",
-      "tool_call_id": "...",
-      "raw_tool": {
-        "name": "terminal",
-        "input": { "command": "ls -la" }
-      }
-    }
-  },
-  "context": {
-    "integration": "denied-hermes-shell-hook",
-    "hook_event_name": "pre_tool_call",
-    "authz_direction": "agent-to-world",
-    "hook_payload": {
-      "hook_event_name": "pre_tool_call",
-      "tool_name": "terminal",
-      "tool_input": { "command": "ls -la" },
-      "session_id": "sess_abc123",
-      "cwd": "/workspace/project",
-      "extra": {
-        "task_id": "...",
-        "tool_call_id": "..."
-      }
-    }
-  }
-}
-```
-
-Denied returns:
-
-```json
-{
-  "decision": false,
-  "context": {
-    "reason": "Shell deletes are not allowed in this workspace."
-  }
-}
-```
-
-If denied, the hook blocks the Hermes tool call:
-
-```json
-{
-  "action": "block",
-  "message": "Shell deletes are not allowed in this workspace."
-}
-```
-
-If allowed, the hook returns the allow reason as non-blocking JSON:
-
-```json
-{
-  "reason": "Read-only shell commands are allowed.",
-  "message": "Read-only shell commands are allowed."
-}
-```
-
-Hermes only uses `pre_tool_call` output to block a call; non-blocking fields are ignored by the model path. Deny reasons are returned to the agent as the blocked tool error. Allow reasons are still emitted by the hook and visible through hook testing/logging, without modifying successful tool results.
-
-## Semantic Mapping
-
-The hook always includes the raw Hermes tool name. When `request.includeToolInput` is enabled, it also includes the raw tool input. `action.name` represents the agent behavior or tool-level operation, while `action.properties.effect` carries the normalized low-level effect (`read`, `create`, `update`, `delete`, or `execute`). When `useSemanticMapping` is enabled, the hook also maps common tool calls into more policy-friendly resources:
-
-| Hermes tool shape              | Action name                              | Effect inference              | Resource mapping              |
-| ------------------------------ | ---------------------------------------- | ----------------------------- | ----------------------------- |
-| `terminal` with `command`      | `run_command`                            | shell command patterns        | `command://<argv0>`           |
-| `search_files`                 | `search_files`                           | `read`                        | `file://<resolved path>`      |
-| tools with `path`/`file_path`  | normalized tool name                     | by tool name                  | `file://<resolved path>`      |
-| tools with `url`/`uri`         | normalized tool name or `http_<method>`  | by tool name                  | `url://<url>`                 |
-| `web_search` / `websearch`     | `web_search`                             | `read`                        | `web-search://default`        |
-| unknown tools                  | normalized tool name                     | `execute`                     | `tool://<tool_name>`          |
-
-For shell commands, simple command pattern matching is used:
-
-- `ls`, `cat`, `grep`, `find`, `pwd`, `date`, etc. -> `read`
-- `cp`, `mv`, `mkdir`, `touch`, redirection, `tee`, etc. -> `create`
-- `sed -i`, `chmod`, `chown`, etc. -> `update`
-- `rm`, `rmdir`, `unlink` -> `delete`
-- unknown commands -> `execute`
-
-## Raw Payload Context and Audit
-
-For observability, the hook includes the original Hermes hook payload in `request.context.hook_payload` by default. This keeps Denied decision logs useful even when the semantic mapper is imperfect or too conservative.
-
-Sensitive fields are redacted recursively before raw payload or raw tool input is sent to Denied or written to local audit logs. Redaction is based on case-insensitive partial key matching. For example, with the default `redaction.keys`, fields such as `token`, `github_token`, `apiKey`, `api_key`, `Authorization`, and `client_secret` are replaced with `[REDACTED]`.
-
-The hook also redacts common inline secret forms in string values, including shell commands, such as `TOKEN=value`, `--token value`, `--api-key=value`, and `Authorization: Bearer ...`.
-
-Large raw payloads are truncated after `request.maxContextBytes` JSON bytes:
-
-```json
-{
-  "truncated": true,
-  "max_bytes": 20000,
-  "original_bytes": 43122,
-  "preview": "{...}"
-}
-```
-
-Local audit logging can be enabled for deeper mapper analysis:
+Enable audit records in `$HERMES_HOME/denied.json`:
 
 ```json
 {
   "audit": {
     "enabled": true,
-    "dir": "~/.hermes/denied-audit",
     "includeRawPayload": true,
     "includeMappedRequest": true,
     "includeDecision": true
@@ -433,33 +157,58 @@ Local audit logging can be enabled for deeper mapper analysis:
 }
 ```
 
-Audit records are appended as JSONL to:
+Audit records are written to:
 
 ```text
-~/.hermes/denied-audit/denied-hermes-hook.jsonl
+$HERMES_HOME/denied-audit/denied-hermes-hook.jsonl
 ```
 
-Audit output is also controlled by `redaction.enabled` and `redaction.keys`.
+## Migrate From The Old Node Hook
 
-## Failure Mode
+If you previously installed the Node shell hook, remove its entry from
+`$HERMES_HOME/config.yaml` after enabling this plugin. Otherwise each tool call
+may be checked twice.
 
-By default, the hook is fail-open: if Denied is unreachable or returns an unexpected response, Hermes is allowed to continue. Set `DENIED_FAIL_MODE=closed` or `"failMode": "closed"` for strict enforcement.
+Remove this block:
 
-When fail-closed, PDP errors block the tool call and return the error reason to Hermes. Explicit config failures, such as a missing or malformed `DENIED_CONFIG` / `DENIED_HERMES_CONFIG`, also follow the configured fail mode.
+```yaml
+hooks:
+  pre_tool_call:
+    - matcher: .*
+      command: node /Users/alice/.hermes/agent-hooks/denied-hermes-hook.js
+      timeout: 15
+hooks_auto_accept: true
+```
+
+Keep `$HERMES_HOME/denied.json`; this Python plugin reads the same config shape.
+
+## Smoke Test
+
+Check that Hermes' Python runtime can import the plugin:
+
+```bash
+hermes_home="${HERMES_HOME:-$HOME/.hermes}"
+PYTHONPATH="$hermes_home/plugins/denied/src" \
+  "$hermes_home/hermes-agent/venv/bin/python" -c "from denied_hermes.plugin import DeniedHermesPlugin; p = DeniedHermesPlugin(); print({'url': p.config.url, 'fail_mode': p.config.fail_mode, 'has_api_key': bool(p.config.api_key)}); p.close()"
+```
+
+Test fail-closed behavior:
+
+```bash
+export DENIED_API_KEY="test"
+export DENIED_URL="http://127.0.0.1:1"
+export DENIED_FAIL_MODE="closed"
+```
+
+Start a new Hermes session and trigger a tool call. It should be blocked with a
+message containing `fail-mode is closed`.
 
 ## Troubleshooting
 
-| Symptom                              | Meaning                                      | Fix                                                |
-| ------------------------------------ | -------------------------------------------- | -------------------------------------------------- |
-| Tool calls always allowed            | Hook not registered or fail-open on errors   | Check `~/.hermes/config.yaml` and Hermes logs.     |
-| `DENIED_API_KEY/apiKey is not set`   | No API key configured                        | Set `DENIED_API_KEY` or `apiKey` in `denied.json`. |
-| `HTTP 401` or `HTTP 403`             | Invalid API key                              | Check the configured API key.                      |
-| `fetch failed`                       | Container cannot reach Denied                | Check Docker networking and `DENIED_URL`.          |
-| Hook is not loaded in gateway/CI      | Hook consent missing in non-TTY runtime      | Use `HERMES_ACCEPT_HOOKS=1` or `hooks_auto_accept`. |
-
-## Links
-
-- [Hermes Agent](https://hermes-agent.nousresearch.com)
-- [Hermes Event Hooks](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/hooks.md)
-- [Denied](https://denied.dev)
-- [Denied Dashboard](https://app.denied.dev)
+- Plugin not listed: confirm files exist under `$HERMES_HOME/plugins/denied` and
+  run `hermes plugins enable denied`.
+- Import error for `denied_sdk`: install the SDK into Hermes' Python runtime:
+  `uv pip install --python "$HERMES_HOME/hermes-agent/venv/bin/python" denied-sdk`.
+- Tool calls still checked twice: remove the old `denied-hermes-hook.js`
+  shell-hook registration from `$HERMES_HOME/config.yaml`.
+- Config changes not taking effect: restart Hermes or start a new session.
