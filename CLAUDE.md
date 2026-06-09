@@ -10,6 +10,7 @@ This is a monorepo containing SDK implementations for the Denied authorization p
 - **TypeScript SDK** (`/typescript`): TypeScript/JavaScript client using axios
 - **OpenClaw extension** (`/extensions/openclaw`): OpenClaw plugin that enforces authorization on every tool call
 - **Claude Code extension** (`/extensions/claude-code`): Claude Code hook plugin that enforces authorization on every tool call
+- **Hermes extension** (`/extensions/hermes`): Hermes Agent shell hook that enforces authorization before tool calls
 
 Both SDKs provide identical functionality for interacting with a Denied authorization server following the Authzen Authorization API 1.0 specification to check permissions for subjects performing actions on resources.
 
@@ -101,6 +102,18 @@ pnpm run --filter @denied-dev/denied-openclaw-plugin build
 
 # Link for development (loads ./index.ts source directly, no build needed)
 openclaw plugins install -l ./extensions/openclaw
+```
+
+### Hermes Extension (`/extensions/hermes`)
+
+The Hermes extension is a zero-dependency Node.js shell hook. It is registered as a workspace package only so its Vitest e2e tests can run with the monorepo test workflow:
+
+```bash
+# Run Hermes hook e2e tests
+pnpm --dir extensions/hermes test
+
+# Run all workspace tests, including Hermes and TypeScript
+pnpm -r test
 ```
 
 ### Pre-commit Hooks
@@ -301,6 +314,14 @@ denied-sdk/
     │   │   └── interceptor.js    # Authorization interceptor (zero deps)
     │   └── README.md             # Plugin documentation
     │
+    ├── hermes/
+    │   ├── denied-hermes-hook.js  # Hermes pre_tool_call shell hook (zero deps)
+    │   ├── denied.example.json    # Example hook config
+    │   ├── denied-hermes-hook.e2e.test.mjs # Vitest e2e coverage for main()
+    │   ├── vitest.config.mjs      # Hermes-local Vitest config
+    │   ├── package.json           # Workspace package + test script
+    │   └── README.md              # Hook documentation
+    │
     └── openclaw/
         ├── src/
         │   ├── handler.ts       # before_tool_call hook implementation
@@ -362,6 +383,53 @@ Configuration resolves per-setting in the order: environment variable → JSON c
 
 The Codex marketplace manifest lives at the repo root in `.agents/plugins/marketplace.json` (Codex's preferred path; differs in schema from Claude's `.claude-plugin/marketplace.json` — the two coexist).
 
+### Hermes Extension Design
+
+The Hermes extension (`extensions/hermes`) is a single zero-dependency Node.js script for Hermes Agent's `pre_tool_call` shell hook. It requires Node 18+ for native `fetch`. For each supported hook event:
+
+1. Hermes streams the hook payload as JSON to stdin (`hook_event_name`, `tool_name`, `tool_input`, `session_id`, `cwd`, optional `extra.task_id` and `extra.tool_call_id`)
+2. The hook reads config from `DENIED_CONFIG`/`DENIED_HERMES_CONFIG`, the Hermes data directory, `~/.hermes/denied.json`, or `/opt/data/denied.json`
+3. It builds a Denied `/pdp/check` request with subject `type: "hermes-agent"`, inferred action name/effect, mapped resource, and optional hook payload context
+4. It sends the request with `X-API-Key` when configured
+5. If the PDP returns `decision: false`, the hook writes `{ "action": "block", "message": "..." }` for Hermes to block the tool call
+6. If the PDP returns `decision: true`, the hook writes a non-blocking JSON reason/message
+7. If the PDP is unavailable or returns an invalid response, the hook follows `failMode`: `open` allows, `closed` blocks
+
+Hermes config uses root-level runtime settings plus grouped request/redaction/audit controls:
+
+```json
+{
+  "url": "https://api.denied.dev",
+  "apiKey": "${DENIED_API_KEY}",
+  "failMode": "open",
+  "timeoutMs": 15000,
+  "useSemanticMapping": true,
+  "subjectId": "session",
+  "request": {
+    "includeHookPayload": true,
+    "includeToolInput": true,
+    "maxContextBytes": 20000
+  },
+  "redaction": {
+    "enabled": true,
+    "keys": ["api_key", "apikey", "authorization", "password", "secret", "token"]
+  },
+  "audit": {
+    "enabled": false,
+    "dir": "~/.hermes/denied-audit",
+    "includeRawPayload": true,
+    "includeMappedRequest": true,
+    "includeDecision": true
+  }
+}
+```
+
+Only connection/runtime values have environment overrides: `DENIED_URL`, `DENIED_API_KEY`, `DENIED_FAIL_MODE`, and `DENIED_TIMEOUT_MS`. The public config shape intentionally does not preserve legacy snake_case or older flat Hermes keys because the extension is not yet production-stable.
+
+`useSemanticMapping` controls whether tool calls map to policy-friendly command/file/url/web-search resources. `subjectId` selects the subject id source: `session`, `task`, or `tool_call`.
+
+The hook exports `main` for tests but only executes automatically when run as the CLI entrypoint (`require.main === module`). Tests call `main()` directly and mock `process.stdin`, `process.stdout.write`, `process.stderr.write`, `process.env`, and `globalThis.fetch`; do not add a real loopback server for these tests.
+
 ### Publishing
 
 **Python**:
@@ -386,6 +454,14 @@ The Codex marketplace manifest lives at the repo root in `.agents/plugins/market
 - Published as `@denied-dev/denied-openclaw-plugin`. `openclaw.runtimeExtensions` points at the compiled `./dist/index.js` (used by registry installs); `openclaw.extensions` keeps `./index.ts` for local source/dev-link installs. `openclaw.compat.pluginApi` pins the minimum OpenClaw host that supports the compiled runtime loader
 - The published package includes `dist` in `files`
 - Install via `openclaw plugins install npm:@denied-dev/denied-openclaw-plugin`
+
+**Hermes extension**:
+
+- No build step — plain JavaScript executed directly by Hermes' shell hook runner
+- Version is in `extensions/hermes/package.json`
+- Published files are the hook script, example config, and README
+- The package has a local `test` script but no runtime dependencies
+- Install by copying `denied-hermes-hook.js` into the Hermes data directory and registering it in `~/.hermes/config.yaml`
 
 **Claude Code extension**:
 

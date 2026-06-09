@@ -71,7 +71,7 @@ Environment variables override values in `denied.json`:
 | `timeoutMs`        | `DENIED_TIMEOUT_MS`      | `15000`                  | PDP timeout in milliseconds.                     |
 | `useSemanticMapping` | -                      | `true`                   | Map common tools to file, command, URL, etc.     |
 | `subjectId`        | -                        | `session`                | `session`, `task`, or `tool_call`.               |
-| `request.includeHookPayload` | -               | `true`                   | Include the original Hermes hook payload in Denied `context.raw_payload`. |
+| `request.includeHookPayload` | -               | `true`                   | Include the original Hermes hook payload in Denied `context.hook_payload`. |
 | `request.includeToolInput` | -                 | `true`                   | Include raw tool input in the authorization request. |
 | `request.maxContextBytes` | -                  | `20000`                  | Maximum JSON bytes for raw payload context before truncation. |
 | `redaction.enabled` | -                       | `true`                   | Redact sensitive fields before sending requests or writing audit logs. |
@@ -187,7 +187,7 @@ The hook maps it to a Denied authorization request:
     "integration": "denied-hermes-shell-hook",
     "hook_event_name": "pre_tool_call",
     "authz_direction": "agent-to-world",
-    "raw_payload": {
+    "hook_payload": {
       "hook_event_name": "pre_tool_call",
       "tool_name": "terminal",
       "tool_input": { "command": "ls -la" },
@@ -256,7 +256,7 @@ For shell commands, simple command pattern matching is used:
 
 ## Raw Payload Context and Audit
 
-For observability, the hook includes the original Hermes hook payload in `request.context.raw_payload` by default. This keeps Denied decision logs useful even when the semantic mapper is imperfect or too conservative.
+For observability, the hook includes the original Hermes hook payload in `request.context.hook_payload` by default. This keeps Denied decision logs useful even when the semantic mapper is imperfect or too conservative.
 
 Sensitive fields are redacted recursively before raw payload or raw tool input is sent to Denied or written to local audit logs. Redaction is based on case-insensitive partial key matching. For example, with the default `redaction.keys`, fields such as `token`, `github_token`, `apiKey`, `api_key`, `Authorization`, and `client_secret` are replaced with `[REDACTED]`.
 

@@ -108,11 +108,12 @@ function readConfigFile() {
     const raw = fs.readFileSync(configPath, "utf-8");
     return interpolateEnv(JSON.parse(raw));
   } catch (err) {
-    throw new Error(
-      `Failed to read Denied config at ${configPath}: ${
+    log(
+      `Failed to read Denied config at ${configPath}; continuing with env/default config. ${
         err instanceof Error ? err.message : String(err)
       }`,
     );
+    return {};
   }
 }
 
@@ -173,21 +174,21 @@ function basenameForCommand(command) {
 }
 
 function inferShellEffect(command) {
-  const patterns = [
-    [/[^|]>\s*\S|[^|]>>\s*\S/, "create"],
-    [/\b(cp|mv|mkdir|touch|rsync|scp|wget\s+-O|curl\s+-o)\b/i, "create"],
-    [/\b(tee|dd)\b/i, "create"],
+  const effectPatterns = [
     [/\b(rm|rmdir|unlink)\b/i, "delete"],
     [/\bsed\s+-i\b/i, "update"],
     [/\bchmod\b|\bchown\b|\bchgrp\b/i, "update"],
+    [/[^|]>\s*\S|[^|]>>\s*\S/, "create"],
+    [/\b(cp|mv|mkdir|touch|rsync|scp|wget\s+-O|curl\s+-o)\b/i, "create"],
+    [/\b(tee|dd)\b/i, "create"],
     [
       /\b(cat|head|tail|less|more|grep|find|ls|pwd|whoami|echo(?!\s.*>)|file|stat|wc|diff|which|type|env|printenv|date|uname)\b/i,
       "read",
     ],
   ];
 
-  for (const [pattern, action] of patterns) {
-    if (pattern.test(command)) return action;
+  for (const [pattern, effect] of effectPatterns) {
+    if (pattern.test(command)) return effect;
   }
   return "execute";
 }
@@ -365,11 +366,11 @@ function subjectIdFromPayload(payload, mode) {
   return payload.session_id || payload.extra?.task_id || "unknown";
 }
 
-function rawPayloadForContext(payload, config) {
-  const rawPayload = config.redactionEnabled
+function hookPayloadForContext(payload, config) {
+  const hookPayload = config.redactionEnabled
     ? redactValue(payload, config.redactKeys)
     : payload;
-  return truncateJsonValue(rawPayload, config.maxContextBytes);
+  return truncateJsonValue(hookPayload, config.maxContextBytes);
 }
 
 function redactIfEnabled(value, config) {
@@ -408,7 +409,7 @@ function createCheckRequest(payload, config) {
   };
 
   if (config.includeHookPayload) {
-    context.raw_payload = rawPayloadForContext(payload, config);
+    context.hook_payload = hookPayloadForContext(payload, config);
   }
 
   return {
@@ -449,7 +450,7 @@ function appendAuditRecord(payload, request, decision, config) {
     };
 
     if (config.audit.includeRawPayload) {
-      record.raw_payload = truncateJsonValue(
+      record.hook_payload = truncateJsonValue(
         redactIfEnabled(payload, config),
         config.maxContextBytes,
       );

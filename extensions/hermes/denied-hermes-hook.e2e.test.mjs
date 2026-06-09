@@ -187,7 +187,7 @@ describe("Hermes Denied hook e2e", () => {
       },
     });
     expect(request.body).toHaveProperty(
-      "context.raw_payload.tool_input.github_token",
+      "context.hook_payload.tool_input.github_token",
       "[REDACTED]",
     );
   });
@@ -237,6 +237,37 @@ describe("Hermes Denied hook e2e", () => {
     });
   });
 
+  it.each([
+    ["rm -rf tmp 2>/dev/null", "delete"],
+    ["rm -rf tmp > /dev/null", "delete"],
+    ["rm -rf tmp 2>&1", "delete"],
+    ["sed -i s/a/b/ file >/dev/null", "update"],
+    ["chmod 600 file >/dev/null", "update"],
+    ["echo hello > file.txt", "create"],
+  ])("infers shell effect for redirected command %s", async (command, effect) => {
+    const result = await runHook(
+      {
+        hook_event_name: "pre_tool_call",
+        tool_name: "terminal",
+        tool_input: { command },
+        session_id: "sess-redirect",
+        cwd: "/workspace/project",
+      },
+      {
+        DENIED_API_KEY: "test-api-key",
+        DENIED_URL: "https://pdp.test",
+      },
+      {
+        body: {
+          decision: true,
+          context: { reason: "Allowed." },
+        },
+      },
+    );
+
+    expect(result.requests[0].body.action.properties.effect).toBe(effect);
+  });
+
   it("blocks fail-closed when the PDP is unavailable", async () => {
     const result = await runHook(
       {
@@ -262,6 +293,90 @@ describe("Hermes Denied hook e2e", () => {
       "message",
       expect.stringContaining("fail-mode is closed"),
     );
+  });
+
+  it("blocks fail-closed when config JSON is malformed and env fail mode is closed", async () => {
+    const configPath = path.join(
+      os.tmpdir(),
+      `denied-hermes-invalid-${process.pid}-${Date.now()}-${Math.random()
+        .toString(16)
+        .slice(2)}.json`,
+    );
+    await fs.writeFile(configPath, "{ invalid json", "utf-8");
+
+    try {
+      const result = await runHook(
+        {
+          hook_event_name: "pre_tool_call",
+          tool_name: "terminal",
+          tool_input: { command: "date" },
+          session_id: "sess-invalid-config",
+        },
+        {
+          DENIED_CONFIG: configPath,
+          DENIED_HERMES_CONFIG: configPath,
+          DENIED_FAIL_MODE: "closed",
+        },
+        { body: { decision: true } },
+      );
+
+      expect(result.stderr).toContain("Failed to read Denied config");
+      expect(result.output).toMatchObject({
+        action: "block",
+      });
+      expect(result.output).toHaveProperty(
+        "message",
+        expect.stringContaining("fail-mode is closed"),
+      );
+      expect(result.requests).toEqual([]);
+    } finally {
+      await fs.rm(configPath, { force: true });
+    }
+  });
+
+  it("continues with env config when config JSON is malformed", async () => {
+    const configPath = path.join(
+      os.tmpdir(),
+      `denied-hermes-invalid-${process.pid}-${Date.now()}-${Math.random()
+        .toString(16)
+        .slice(2)}.json`,
+    );
+    await fs.writeFile(configPath, "{ invalid json", "utf-8");
+
+    try {
+      const result = await runHook(
+        {
+          hook_event_name: "pre_tool_call",
+          tool_name: "terminal",
+          tool_input: { command: "date" },
+          session_id: "sess-invalid-config-env",
+        },
+        {
+          DENIED_CONFIG: configPath,
+          DENIED_HERMES_CONFIG: configPath,
+          DENIED_API_KEY: "env-api-key",
+          DENIED_URL: "https://env-pdp.test",
+          DENIED_FAIL_MODE: "closed",
+        },
+        {
+          body: {
+            decision: true,
+            context: { reason: "Allowed with env config." },
+          },
+        },
+      );
+
+      expect(result.stderr).toContain("Failed to read Denied config");
+      expect(result.requests).toHaveLength(1);
+      expect(result.requests[0].url).toBe("https://env-pdp.test/pdp/check");
+      expect(result.requests[0].headers["X-API-Key"]).toBe("env-api-key");
+      expect(result.output).toEqual({
+        reason: "Allowed with env config.",
+        message: "Allowed with env config.",
+      });
+    } finally {
+      await fs.rm(configPath, { force: true });
+    }
   });
 
   it("allows events that are not pre_tool_call without contacting the PDP", async () => {
@@ -306,7 +421,7 @@ describe("Hermes Denied hook e2e", () => {
       },
     );
 
-    expect(result.requests[0].body.context).not.toHaveProperty("raw_payload");
+    expect(result.requests[0].body.context).not.toHaveProperty("hook_payload");
     expect(result.requests[0].body.resource.properties.raw_tool).toEqual({
       name: "terminal",
     });
@@ -336,7 +451,7 @@ describe("Hermes Denied hook e2e", () => {
       "secret-token",
     );
     expect(result.requests[0].body).toHaveProperty(
-      "context.raw_payload.tool_input.github_token",
+      "context.hook_payload.tool_input.github_token",
       "secret-token",
     );
   });
