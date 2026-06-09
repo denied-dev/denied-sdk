@@ -1,23 +1,18 @@
 import fs from "node:fs/promises";
 import { Readable } from "node:stream";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
 
-const extensionDir = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const { main } = require("./denied-hermes-hook.js");
-const unusedConfigPath = path.join(
-  os.tmpdir(),
-  `denied-hermes-missing-${process.pid}.json`,
-);
 
 async function runHook(payload, env, fetchResult, config) {
   let stdout = "";
   let stderr = "";
   const requests = [];
   let configPath;
+  const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "denied-hermes-home-"));
   const fetchMock = async (url, init = {}) => {
     if (fetchResult instanceof Error) {
       throw fetchResult;
@@ -56,9 +51,9 @@ async function runHook(payload, env, fetchResult, config) {
   }
 
   const envValues = {
-    DENIED_CONFIG: configPath || unusedConfigPath,
-    DENIED_HERMES_CONFIG: configPath || unusedConfigPath,
+    HOME: tempHome,
     ...env,
+    ...(config ? { DENIED_CONFIG: configPath, DENIED_HERMES_CONFIG: configPath } : {}),
   };
   const originalEnvValues = Object.fromEntries(
     Object.keys(envValues).map((key) => [key, process.env[key]]),
@@ -102,6 +97,7 @@ async function runHook(payload, env, fetchResult, config) {
     if (configPath) {
       await fs.rm(configPath, { force: true });
     }
+    await fs.rm(tempHome, { recursive: true, force: true });
   }
 
   return {
@@ -334,7 +330,7 @@ describe("Hermes Denied hook e2e", () => {
     }
   });
 
-  it("continues with env config when config JSON is malformed", async () => {
+  it("allows fail-open when explicitly configured JSON is malformed", async () => {
     const configPath = path.join(
       os.tmpdir(),
       `denied-hermes-invalid-${process.pid}-${Date.now()}-${Math.random()
@@ -356,27 +352,82 @@ describe("Hermes Denied hook e2e", () => {
           DENIED_HERMES_CONFIG: configPath,
           DENIED_API_KEY: "env-api-key",
           DENIED_URL: "https://env-pdp.test",
-          DENIED_FAIL_MODE: "closed",
+          DENIED_FAIL_MODE: "open",
         },
-        {
-          body: {
-            decision: true,
-            context: { reason: "Allowed with env config." },
-          },
-        },
+        { body: { decision: true } },
       );
 
       expect(result.stderr).toContain("Failed to read Denied config");
-      expect(result.requests).toHaveLength(1);
-      expect(result.requests[0].url).toBe("https://env-pdp.test/pdp/check");
-      expect(result.requests[0].headers["X-API-Key"]).toBe("env-api-key");
-      expect(result.output).toEqual({
-        reason: "Allowed with env config.",
-        message: "Allowed with env config.",
+      expect(result.output).toMatchObject({
+        reason: expect.stringContaining("fail-mode is open"),
       });
+      expect(result.requests).toEqual([]);
     } finally {
       await fs.rm(configPath, { force: true });
     }
+  });
+
+  it("uses env config when no config file is set", async () => {
+    const result = await runHook(
+      {
+        hook_event_name: "pre_tool_call",
+        tool_name: "terminal",
+        tool_input: { command: "date" },
+        session_id: "sess-env-only",
+      },
+      {
+        DENIED_API_KEY: "env-api-key",
+        DENIED_URL: "https://env-pdp.test",
+        DENIED_FAIL_MODE: "closed",
+      },
+      {
+        body: {
+          decision: true,
+          context: { reason: "Allowed with env config." },
+        },
+      },
+    );
+
+    expect(result.requests).toHaveLength(1);
+    expect(result.requests[0].url).toBe("https://env-pdp.test/pdp/check");
+    expect(result.requests[0].headers["X-API-Key"]).toBe("env-api-key");
+    expect(result.output).toEqual({
+      reason: "Allowed with env config.",
+      message: "Allowed with env config.",
+    });
+  });
+
+  it("falls back with warnings for invalid non-secret config values", async () => {
+    const result = await runHook(
+      {
+        hook_event_name: "pre_tool_call",
+        tool_name: "terminal",
+        tool_input: { command: "ls -la" },
+        session_id: "sess-invalid-values",
+        extra: { task_id: "task-invalid-values" },
+      },
+      {
+        DENIED_FAIL_MODE: "strict-env",
+      },
+      { body: { decision: true } },
+      {
+        url: "https://pdp.test",
+        apiKey: "test-api-key",
+        failMode: "strict",
+        timeoutMs: "abc",
+        subjectId: "agent",
+        request: {
+          maxContextBytes: 0,
+        },
+      },
+    );
+
+    expect(result.stderr).toContain("Invalid failMode");
+    expect(result.stderr).toContain("Invalid timeoutMs");
+    expect(result.stderr).toContain("Invalid subjectId");
+    expect(result.stderr).toContain("Invalid request.maxContextBytes");
+    expect(result.requests).toHaveLength(1);
+    expect(result.requests[0].body.subject.id).toBe("sess-invalid-values");
   });
 
   it("allows events that are not pre_tool_call without contacting the PDP", async () => {
@@ -427,12 +478,68 @@ describe("Hermes Denied hook e2e", () => {
     });
   });
 
+  it("redacts inline command secrets in PDP requests and audit records", async () => {
+    const auditDir = await fs.mkdtemp(path.join(os.tmpdir(), "denied-hermes-audit-"));
+    try {
+      const command =
+        "curl -H 'Authorization: Bearer bearer-secret' --api-key cli-secret https://example.test TOKEN=env-secret";
+      const result = await runHook(
+        {
+          hook_event_name: "pre_tool_call",
+          tool_name: "terminal",
+          tool_input: { command, github_token: "field-secret" },
+          session_id: "sess-redact-command",
+        },
+        {},
+        { body: { decision: true } },
+        {
+          url: "https://pdp.test",
+          apiKey: "test-api-key",
+          audit: {
+            enabled: true,
+            dir: auditDir,
+          },
+        },
+      );
+      const requestBody = JSON.stringify(result.requests[0].body);
+      const auditRaw = await fs.readFile(
+        path.join(auditDir, "denied-hermes-hook.jsonl"),
+        "utf-8",
+      );
+      const auditRecord = JSON.parse(auditRaw.trim());
+      const auditBody = JSON.stringify(auditRecord);
+
+      expect(requestBody).not.toContain("bearer-secret");
+      expect(requestBody).not.toContain("cli-secret");
+      expect(requestBody).not.toContain("env-secret");
+      expect(requestBody).not.toContain("field-secret");
+      expect(result.requests[0].body.resource.properties.command).toContain(
+        "Authorization: Bearer [REDACTED]",
+      );
+      expect(result.requests[0].body.resource.properties.command).toContain(
+        "--api-key [REDACTED]",
+      );
+      expect(result.requests[0].body.context.hook_payload.tool_input.command).toContain(
+        "TOKEN=[REDACTED]",
+      );
+      expect(auditBody).not.toContain("bearer-secret");
+      expect(auditBody).not.toContain("cli-secret");
+      expect(auditBody).not.toContain("env-secret");
+      expect(auditBody).not.toContain("field-secret");
+    } finally {
+      await fs.rm(auditDir, { recursive: true, force: true });
+    }
+  });
+
   it("honors redaction.enabled false", async () => {
     const result = await runHook(
       {
         hook_event_name: "pre_tool_call",
         tool_name: "terminal",
-        tool_input: { command: "ls -la", github_token: "secret-token" },
+        tool_input: {
+          command: "curl --token secret-token https://example.test",
+          github_token: "secret-token",
+        },
         session_id: "sess-6",
       },
       {},
@@ -451,9 +558,54 @@ describe("Hermes Denied hook e2e", () => {
       "secret-token",
     );
     expect(result.requests[0].body).toHaveProperty(
+      "resource.properties.command",
+      "curl --token secret-token https://example.test",
+    );
+    expect(result.requests[0].body).toHaveProperty(
       "context.hook_payload.tool_input.github_token",
       "secret-token",
     );
+    expect(result.requests[0].body).toHaveProperty(
+      "context.hook_payload.tool_input.command",
+      "curl --token secret-token https://example.test",
+    );
+  });
+
+  it("truncates oversized command and raw tool input in PDP requests", async () => {
+    const longCommand = `echo ${"x".repeat(500)}`;
+    const result = await runHook(
+      {
+        hook_event_name: "pre_tool_call",
+        tool_name: "terminal",
+        tool_input: {
+          command: longCommand,
+          payload: "y".repeat(500),
+        },
+        session_id: "sess-large-input",
+      },
+      {},
+      { body: { decision: true } },
+      {
+        url: "https://pdp.test",
+        apiKey: "test-api-key",
+        request: {
+          maxContextBytes: 120,
+        },
+      },
+    );
+
+    expect(result.requests[0].body.resource.properties.command).toMatchObject({
+      truncated: true,
+      max_bytes: 120,
+    });
+    expect(result.requests[0].body.resource.properties.raw_tool.input).toMatchObject({
+      truncated: true,
+      max_bytes: 120,
+    });
+    expect(result.requests[0].body.context.hook_payload).toMatchObject({
+      truncated: true,
+      max_bytes: 120,
+    });
   });
 
   it("uses generic tool resources when semantic mapping is disabled", async () => {

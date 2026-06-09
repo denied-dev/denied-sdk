@@ -260,6 +260,8 @@ For observability, the hook includes the original Hermes hook payload in `reques
 
 Sensitive fields are redacted recursively before raw payload or raw tool input is sent to Denied or written to local audit logs. Redaction is based on case-insensitive partial key matching. For example, with the default `redaction.keys`, fields such as `token`, `github_token`, `apiKey`, `api_key`, `Authorization`, and `client_secret` are replaced with `[REDACTED]`.
 
+The hook also redacts common inline secret forms in string values, including shell commands, such as `TOKEN=value`, `--token value`, `--api-key=value`, and `Authorization: Bearer ...`.
+
 Large raw payloads are truncated after `request.maxContextBytes` JSON bytes:
 
 ```json
@@ -297,7 +299,7 @@ Audit output is also controlled by `redaction.enabled` and `redaction.keys`.
 
 By default, the hook is fail-open: if Denied is unreachable or returns an unexpected response, Hermes is allowed to continue. Set `DENIED_FAIL_MODE=closed` or `"failMode": "closed"` for strict enforcement.
 
-When fail-closed, PDP errors block the tool call and return the error reason to Hermes.
+When fail-closed, PDP errors block the tool call and return the error reason to Hermes. Explicit config failures, such as a missing or malformed `DENIED_CONFIG` / `DENIED_HERMES_CONFIG`, also follow the configured fail mode.
 
 ## Troubleshooting
 

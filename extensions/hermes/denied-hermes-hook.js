@@ -19,6 +19,8 @@ const DEFAULT_REDACT_KEYS = [
   "token",
 ];
 const AGENT_HOOKS_DIR = "agent-hooks";
+const VALID_FAIL_MODES = new Set(["open", "closed"]);
+const VALID_SUBJECT_IDS = new Set(["session", "task", "tool_call"]);
 
 function log(message) {
   process.stderr.write(`[denied-dev] ${message}\n`);
@@ -93,8 +95,9 @@ function interpolateEnv(value) {
 
 function readConfigFile() {
   const explicitPath = process.env.DENIED_CONFIG || process.env.DENIED_HERMES_CONFIG;
+  const expandedExplicitPath = expandHome(explicitPath);
   const candidatePaths = explicitPath
-    ? [expandHome(explicitPath)]
+    ? [expandedExplicitPath]
     : [
         path.join(hermesDataDir(), "denied.json"),
         expandHome("~/.hermes/denied.json"),
@@ -102,24 +105,46 @@ function readConfigFile() {
       ];
 
   const configPath = candidatePaths.find((candidate) => candidate && fs.existsSync(candidate));
+  if (explicitPath && !configPath) {
+    throw new Error(`Denied config was explicitly set but not found at ${expandedExplicitPath}`);
+  }
   if (!configPath) return {};
 
   try {
     const raw = fs.readFileSync(configPath, "utf-8");
     return interpolateEnv(JSON.parse(raw));
   } catch (err) {
-    log(
-      `Failed to read Denied config at ${configPath}; continuing with env/default config. ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
+    const message = `Failed to read Denied config at ${configPath}: ${
+      err instanceof Error ? err.message : String(err)
+    }`;
+    if (explicitPath) {
+      throw new Error(message);
+    }
+    log(`${message}; continuing with env/default config.`);
     return {};
   }
 }
 
-function parseInteger(value, fallback) {
-  const parsed = parseInt(String(value ?? ""), 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
+function parsePositiveInteger(value, fallback, name) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const parsed = Number(String(value));
+  if (Number.isInteger(parsed) && parsed > 0) return parsed;
+  log(`Invalid ${name}: ${value}. Using default ${fallback}.`);
+  return fallback;
+}
+
+function normalizeFailMode(value) {
+  const mode = String(value || DEFAULT_FAIL_MODE).toLowerCase();
+  if (VALID_FAIL_MODES.has(mode)) return mode;
+  log(`Invalid failMode: ${value}. Using default ${DEFAULT_FAIL_MODE}.`);
+  return DEFAULT_FAIL_MODE;
+}
+
+function normalizeSubjectId(value) {
+  const subjectId = String(value || "session");
+  if (VALID_SUBJECT_IDS.has(subjectId)) return subjectId;
+  log(`Invalid subjectId: ${value}. Using default session.`);
+  return "session";
 }
 
 function asArray(value) {
@@ -135,21 +160,23 @@ function resolveConfig() {
   return {
     url: process.env.DENIED_URL || fileConfig.url || DEFAULT_DENIED_URL,
     apiKey: process.env.DENIED_API_KEY || fileConfig.apiKey || "",
-    failMode: String(
+    failMode: normalizeFailMode(
       process.env.DENIED_FAIL_MODE || fileConfig.failMode || DEFAULT_FAIL_MODE,
-    ).toLowerCase(),
-    timeoutMs: parseInteger(
+    ),
+    timeoutMs: parsePositiveInteger(
       process.env.DENIED_TIMEOUT_MS || fileConfig.timeoutMs,
       DEFAULT_TIMEOUT_MS,
+      "timeoutMs",
     ),
     includeToolInput: requestConfig.includeToolInput ?? true,
     useSemanticMapping: fileConfig.useSemanticMapping ?? true,
-    subjectId: fileConfig.subjectId || "session",
+    subjectId: normalizeSubjectId(fileConfig.subjectId || "session"),
     includeHookPayload: requestConfig.includeHookPayload ?? true,
     redactionEnabled: redactionConfig.enabled ?? true,
-    maxContextBytes: parseInteger(
+    maxContextBytes: parsePositiveInteger(
       requestConfig.maxContextBytes,
       DEFAULT_CONTEXT_MAX_BYTES,
+      "request.maxContextBytes",
     ),
     redactKeys: redactionKeys.length > 0 ? redactionKeys : DEFAULT_REDACT_KEYS,
     audit: {
@@ -265,6 +292,22 @@ function isSensitiveKey(key, redactKeys) {
   });
 }
 
+function redactStringSecrets(value) {
+  return value
+    .replace(
+      /(\bauthorization:\s*(?:bearer|basic)?\s+)([^\s"';&|]+)/gi,
+      "$1[REDACTED]",
+    )
+    .replace(
+      /(\b(?:api[_-]?key|apikey|token|secret|password|authorization)\b\s*=\s*)([^\s"';&|]+)/gi,
+      "$1[REDACTED]",
+    )
+    .replace(
+      /(--(?:api[-_]?key|token|secret|password|authorization)(?:=|\s+))([^\s"';&|]+)/gi,
+      "$1[REDACTED]",
+    );
+}
+
 function redactValue(value, redactKeys, seen = new WeakSet()) {
   if (Array.isArray(value)) {
     return value.map((item) => redactValue(item, redactKeys, seen));
@@ -284,7 +327,7 @@ function redactValue(value, redactKeys, seen = new WeakSet()) {
     );
   }
 
-  return value;
+  return typeof value === "string" ? redactStringSecrets(value) : value;
 }
 
 function truncateJsonValue(value, maxBytes) {
@@ -377,6 +420,10 @@ function redactIfEnabled(value, config) {
   return config.redactionEnabled ? redactValue(value, config.redactKeys) : value;
 }
 
+function boundedIfEnabled(value, config) {
+  return truncateJsonValue(redactIfEnabled(value, config), config.maxContextBytes);
+}
+
 function createCheckRequest(payload, config) {
   const toolName = payload.tool_name || "unknown";
   const toolInput = asObject(payload.tool_input);
@@ -398,9 +445,13 @@ function createCheckRequest(payload, config) {
     tool_call_id: extra.tool_call_id,
     raw_tool: {
       name: toolName,
-      ...(config.includeToolInput ? { input: redactIfEnabled(toolInput, config) } : {}),
+      ...(config.includeToolInput ? { input: boundedIfEnabled(toolInput, config) } : {}),
     },
   };
+
+  if (Object.hasOwn(resourceProperties, "command")) {
+    resourceProperties.command = boundedIfEnabled(resourceProperties.command, config);
+  }
 
   const context = {
     integration: "denied-hermes-shell-hook",
@@ -504,7 +555,10 @@ async function main() {
   try {
     config = resolveConfig();
   } catch (err) {
-    failSafe(err instanceof Error ? err.message : String(err), DEFAULT_FAIL_MODE);
+    failSafe(
+      err instanceof Error ? err.message : String(err),
+      normalizeFailMode(process.env.DENIED_FAIL_MODE || DEFAULT_FAIL_MODE),
+    );
     return;
   }
 
