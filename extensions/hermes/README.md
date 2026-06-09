@@ -163,25 +163,6 @@ Audit records are written to:
 $HERMES_HOME/denied-audit/denied-hermes-hook.jsonl
 ```
 
-## Migrate From The Old Node Hook
-
-If you previously installed the Node shell hook, remove its entry from
-`$HERMES_HOME/config.yaml` after enabling this plugin. Otherwise each tool call
-may be checked twice.
-
-Remove this block:
-
-```yaml
-hooks:
-  pre_tool_call:
-    - matcher: .*
-      command: node /Users/alice/.hermes/agent-hooks/denied-hermes-hook.js
-      timeout: 15
-hooks_auto_accept: true
-```
-
-Keep `$HERMES_HOME/denied.json`; this Python plugin reads the same config shape.
-
 ## Smoke Test
 
 Check that Hermes' Python runtime can import the plugin:
@@ -209,6 +190,4 @@ message containing `fail-mode is closed`.
   run `hermes plugins enable denied`.
 - Import error for `denied_sdk`: install the SDK into Hermes' Python runtime:
   `uv pip install --python "$HERMES_HOME/hermes-agent/venv/bin/python" denied-sdk`.
-- Tool calls still checked twice: remove the old `denied-hermes-hook.js`
-  shell-hook registration from `$HERMES_HOME/config.yaml`.
 - Config changes not taking effect: restart Hermes or start a new session.

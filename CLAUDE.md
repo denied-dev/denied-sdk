@@ -10,7 +10,7 @@ This is a monorepo containing SDK implementations for the Denied authorization p
 - **TypeScript SDK** (`/typescript`): TypeScript/JavaScript client using axios
 - **OpenClaw extension** (`/extensions/openclaw`): OpenClaw plugin that enforces authorization on every tool call
 - **Claude Code extension** (`/extensions/claude-code`): Claude Code hook plugin that enforces authorization on every tool call
-- **Hermes extension** (`/extensions/hermes`): Hermes Agent shell hook that enforces authorization before tool calls
+- **Hermes extension** (`/extensions/hermes`): Hermes Agent Python plugin that enforces authorization before tool calls
 
 Both SDKs provide identical functionality for interacting with a Denied authorization server following the Authzen Authorization API 1.0 specification to check permissions for subjects performing actions on resources.
 
@@ -106,14 +106,18 @@ openclaw plugins install -l ./extensions/openclaw
 
 ### Hermes Extension (`/extensions/hermes`)
 
-The Hermes extension ships a zero-dependency Node.js shell hook plus a package-manager installer CLI. It is registered as a workspace package so its Vitest e2e tests can run with the monorepo test workflow:
+The Hermes extension is a Python plugin for Hermes Agent. It is part of the root `uv` workspace, and extension checks should run from the repository root:
 
 ```bash
-# Run Hermes hook e2e tests
-pnpm --dir extensions/hermes test
+# Run Hermes plugin tests
+uv run --package denied-hermes-plugin pytest extensions/hermes/tests
 
-# Run all workspace tests, including Hermes and TypeScript
-pnpm -r test
+# Lint and format-check Hermes plugin code
+uv run --package denied-hermes-plugin ruff check extensions/hermes
+uv run --package denied-hermes-plugin ruff format --check extensions/hermes
+
+# Type-check Hermes plugin code and tests
+uv run --package denied-hermes-plugin pyright extensions/hermes/src/denied_hermes extensions/hermes/tests
 ```
 
 ### Pre-commit Hooks
@@ -315,14 +319,12 @@ denied-sdk/
     │   └── README.md             # Plugin documentation
     │
     ├── hermes/
-    │   ├── denied-hermes-hook.js  # Hermes pre_tool_call shell hook (zero deps)
-    │   ├── denied-hermes-cli.js   # Package-manager installer/status/update/uninstall CLI
-    │   ├── denied.example.json    # Example hook config
-    │   ├── denied-hermes-hook.e2e.test.mjs # Vitest e2e coverage for main()
-    │   ├── denied-hermes-cli.e2e.test.mjs # Vitest e2e coverage for installer CLI
-    │   ├── vitest.config.mjs      # Hermes-local Vitest config
-    │   ├── package.json           # Workspace package + test script
-    │   └── README.md              # Hook documentation
+    │   ├── __init__.py            # Hermes plugin entrypoint exporting register()
+    │   ├── plugin.yaml            # Hermes plugin manifest
+    │   ├── pyproject.toml         # Python package config
+    │   ├── src/denied_hermes/     # Plugin runtime implementation
+    │   ├── tests/                 # Pytest coverage
+    │   └── README.md              # Plugin documentation
     │
     └── openclaw/
         ├── src/
@@ -387,17 +389,17 @@ The Codex marketplace manifest lives at the repo root in `.agents/plugins/market
 
 ### Hermes Extension Design
 
-The Hermes extension (`extensions/hermes`) is a single zero-dependency Node.js script for Hermes Agent's `pre_tool_call` shell hook. It requires Node 18+ for native `fetch`. For each supported hook event:
+The Hermes extension (`extensions/hermes`) is a Python plugin for Hermes Agent's standard plugin system. Hermes discovers the plugin from `plugin.yaml` and imports `register(ctx)` from `__init__.py`. For each supported tool call:
 
-1. Hermes streams the hook payload as JSON to stdin (`hook_event_name`, `tool_name`, `tool_input`, `session_id`, `cwd`, optional `extra.task_id` and `extra.tool_call_id`)
-2. The hook reads config from `DENIED_CONFIG`/`DENIED_HERMES_CONFIG`, the Hermes data directory, `~/.hermes/denied.json`, or `/opt/data/denied.json`
-3. It builds a Denied `/pdp/check` request with subject `type: "hermes-agent"`, inferred action name/effect, mapped resource, and optional hook payload context
-4. It sends the request with `X-API-Key` when configured
-5. If the PDP returns `decision: false`, the hook writes `{ "action": "block", "message": "..." }` for Hermes to block the tool call
-6. If the PDP returns `decision: true`, the hook writes a non-blocking JSON reason/message
+1. `register(ctx)` constructs `DeniedHermesPlugin` and registers a `pre_tool_call` hook
+2. The hook receives Hermes tool metadata (`tool_name`, args, task/session/tool-call ids, and cwd)
+3. The mapper builds a Denied `/pdp/check` request with subject `type: "hermes-agent"`, inferred action name/effect, mapped resource, and optional hook payload context
+4. The plugin sends the request with `X-API-Key` when configured
+5. If the PDP returns `decision: false`, the hook returns `{ "action": "block", "message": "..." }` for Hermes to block the tool call
+6. If the PDP returns `decision: true`, the hook returns `None`, so Hermes continues the tool call normally
 7. If the PDP is unavailable or returns an invalid response, the hook follows `failMode`: `open` allows, `closed` blocks
 
-Hermes config uses root-level runtime settings plus grouped request/redaction/audit controls:
+Hermes config resolves under the active Hermes profile. `HERMES_HOME` takes precedence, then Hermes' own home helper when available, then `~/.hermes`. The plugin reads environment variables first, then an explicit `DENIED_CONFIG`, then `$HERMES_HOME/denied.json`, then `/opt/data/denied.json`, then built-in defaults.
 
 ```json
 {
@@ -418,7 +420,6 @@ Hermes config uses root-level runtime settings plus grouped request/redaction/au
   },
   "audit": {
     "enabled": false,
-    "dir": "~/.hermes/denied-audit",
     "includeRawPayload": true,
     "includeMappedRequest": true,
     "includeDecision": true
@@ -426,13 +427,13 @@ Hermes config uses root-level runtime settings plus grouped request/redaction/au
 }
 ```
 
-Only connection/runtime values have environment overrides: `DENIED_URL`, `DENIED_API_KEY`, `DENIED_FAIL_MODE`, and `DENIED_TIMEOUT_MS`. The public config shape intentionally does not preserve legacy snake_case or older flat Hermes keys because the extension is not yet production-stable.
+Only connection/runtime values have environment overrides: `DENIED_URL`, `DENIED_API_KEY`, `DENIED_FAIL_MODE`, and `DENIED_TIMEOUT_MS`.
 
 `useSemanticMapping` controls whether tool calls map to policy-friendly command/file/url/web-search resources. `subjectId` selects the subject id source: `session`, `task`, or `tool_call`.
 
-The hook exports `main` for tests but only executes automatically when run as the CLI entrypoint (`require.main === module`). Tests call `main()` directly and mock `process.stdin`, `process.stdout.write`, `process.stderr.write`, `process.env`, and `globalThis.fetch`; do not add a real loopback server for these tests.
+The plugin intentionally avoids importing `denied_sdk` at discovery time. Runtime dependencies are imported lazily when the hook is constructed or a tool call is mapped, matching Hermes' optional dependency loading guidance.
 
-The package exposes the `denied-hermes-hook` bin as the installer CLI. This lets users install through package managers with commands like `npx @denied-dev/denied-hermes-hook install`, `pnpm dlx @denied-dev/denied-hermes-hook install`, `yarn dlx @denied-dev/denied-hermes-hook install`, or `bunx @denied-dev/denied-hermes-hook install`. The installer copies the packaged `denied-hermes-hook.js` into the Hermes data directory and merges the hook registration into `config.yaml`; Hermes itself runs the copied hook script, not the installer CLI.
+Tests inject a fake Denied client and run entirely in process. Keep tests isolated from the developer's real Hermes profile by setting `HERMES_HOME` to a temporary directory.
 
 ### Publishing
 
@@ -461,12 +462,11 @@ The package exposes the `denied-hermes-hook` bin as the installer CLI. This lets
 
 **Hermes extension**:
 
-- No build step — plain JavaScript executed directly by Hermes' shell hook runner
-- Version is in `extensions/hermes/package.json`
-- Published files are the installer CLI, hook script, example config, and README
-- The hook script stays zero-dependency; the installer CLI depends on `js-yaml` to safely merge Hermes `config.yaml`
-- Primary install path is package-manager execution: `npx @denied-dev/denied-hermes-hook install`
-- Manual install remains possible by copying `denied-hermes-hook.js` into the Hermes data directory and registering it in `~/.hermes/config.yaml`
+- Python package metadata is in `extensions/hermes/pyproject.toml`
+- Hermes plugin metadata is in `extensions/hermes/plugin.yaml`
+- The plugin depends on `denied-sdk` at runtime but loads it lazily
+- Current monorepo install flow copies `extensions/hermes` into `$HERMES_HOME/plugins/denied` and enables it with `hermes plugins enable denied`
+- A future standalone plugin repository can use `hermes plugins install <owner>/<repo> --enable` when `plugin.yaml` lives at the repository root
 
 **Claude Code extension**:
 
