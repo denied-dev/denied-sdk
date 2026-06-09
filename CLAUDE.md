@@ -106,7 +106,7 @@ openclaw plugins install -l ./extensions/openclaw
 
 ### Hermes Extension (`/extensions/hermes`)
 
-The Hermes extension is a zero-dependency Node.js shell hook. It is registered as a workspace package only so its Vitest e2e tests can run with the monorepo test workflow:
+The Hermes extension ships a zero-dependency Node.js shell hook plus a package-manager installer CLI. It is registered as a workspace package so its Vitest e2e tests can run with the monorepo test workflow:
 
 ```bash
 # Run Hermes hook e2e tests
@@ -316,8 +316,10 @@ denied-sdk/
     │
     ├── hermes/
     │   ├── denied-hermes-hook.js  # Hermes pre_tool_call shell hook (zero deps)
+    │   ├── denied-hermes-cli.js   # Package-manager installer/status/update/uninstall CLI
     │   ├── denied.example.json    # Example hook config
     │   ├── denied-hermes-hook.e2e.test.mjs # Vitest e2e coverage for main()
+    │   ├── denied-hermes-cli.e2e.test.mjs # Vitest e2e coverage for installer CLI
     │   ├── vitest.config.mjs      # Hermes-local Vitest config
     │   ├── package.json           # Workspace package + test script
     │   └── README.md              # Hook documentation
@@ -430,6 +432,8 @@ Only connection/runtime values have environment overrides: `DENIED_URL`, `DENIED
 
 The hook exports `main` for tests but only executes automatically when run as the CLI entrypoint (`require.main === module`). Tests call `main()` directly and mock `process.stdin`, `process.stdout.write`, `process.stderr.write`, `process.env`, and `globalThis.fetch`; do not add a real loopback server for these tests.
 
+The package exposes the `denied-hermes-hook` bin as the installer CLI. This lets users install through package managers with commands like `npx @denied-dev/denied-hermes-hook install`, `pnpm dlx @denied-dev/denied-hermes-hook install`, `yarn dlx @denied-dev/denied-hermes-hook install`, or `bunx @denied-dev/denied-hermes-hook install`. The installer copies the packaged `denied-hermes-hook.js` into the Hermes data directory and merges the hook registration into `config.yaml`; Hermes itself runs the copied hook script, not the installer CLI.
+
 ### Publishing
 
 **Python**:
@@ -459,9 +463,10 @@ The hook exports `main` for tests but only executes automatically when run as th
 
 - No build step — plain JavaScript executed directly by Hermes' shell hook runner
 - Version is in `extensions/hermes/package.json`
-- Published files are the hook script, example config, and README
-- The package has a local `test` script but no runtime dependencies
-- Install by copying `denied-hermes-hook.js` into the Hermes data directory and registering it in `~/.hermes/config.yaml`
+- Published files are the installer CLI, hook script, example config, and README
+- The hook script stays zero-dependency; the installer CLI depends on `js-yaml` to safely merge Hermes `config.yaml`
+- Primary install path is package-manager execution: `npx @denied-dev/denied-hermes-hook install`
+- Manual install remains possible by copying `denied-hermes-hook.js` into the Hermes data directory and registering it in `~/.hermes/config.yaml`
 
 **Claude Code extension**:
 

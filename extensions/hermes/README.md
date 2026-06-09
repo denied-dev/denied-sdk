@@ -12,21 +12,98 @@ This MVP is implemented as a Hermes shell hook. It is a single zero-dependency N
 
 ## Quickstart
 
-### Step 1: Install the hook script
-
-Copy `denied-hermes-hook.js` into your Hermes data directory:
+Install with your preferred JavaScript package manager:
 
 ```bash
-mkdir -p ~/.hermes/agent-hooks
-cp denied-hermes-hook.js ~/.hermes/agent-hooks/denied-hermes-hook.js
-chmod +x ~/.hermes/agent-hooks/denied-hermes-hook.js
+npx @denied-dev/denied-hermes-hook install
 ```
 
-For Docker deployments using the upstream Hermes layout, `~/.hermes` on the host is mounted into the container as `/opt/data`.
+```bash
+pnpm dlx @denied-dev/denied-hermes-hook install
+```
 
-### Step 2: Configure Denied
+```bash
+yarn dlx @denied-dev/denied-hermes-hook install
+```
 
-Create `~/.hermes/denied.json`:
+```bash
+bunx @denied-dev/denied-hermes-hook install
+```
+
+The installer prompts for your Denied API key, then:
+
+- copies the hook to `~/.hermes/agent-hooks/denied-hermes-hook.js`
+- creates or updates `~/.hermes/denied.json`
+- merges the Denied hook into `~/.hermes/config.yaml`
+- sets `hooks_auto_accept: true` so Hermes can run hooks in non-interactive sessions
+- creates timestamped backups before changing existing files
+
+Restart Hermes after installation if it is already running.
+
+## Installer CLI
+
+The package executable is the installer CLI:
+
+```bash
+npx @denied-dev/denied-hermes-hook <command> [options]
+```
+
+Commands:
+
+| Command | Description |
+| ------- | ----------- |
+| `install` | Install or update the hook file, Denied config, and Hermes hook registration. |
+| `status` | Show whether the hook file, Denied config, Hermes config, hook registration, and API key are present. |
+| `update` | Replace the installed hook script with the version from the current package. Leaves config files unchanged. |
+| `uninstall` | Remove the Denied hook registration and installed hook file. Leaves `denied.json` in place. |
+
+Useful options:
+
+| Option | Description |
+| ------ | ----------- |
+| `--data-dir <path>` | Hermes data directory. Defaults to `~/.hermes`. |
+| `--api-key <key>` | Store this Denied API key in `denied.json` without prompting. |
+| `--url <url>` | Denied PDP URL. Defaults to `https://api.denied.dev`. |
+| `--fail-mode <open\|closed>` | Fail-open or fail-closed behavior when Denied is unavailable. Defaults to `open`. |
+| `--timeout-ms <number>` | PDP request timeout. Defaults to `15000`. |
+| `--yes` | Use non-interactive defaults. If no API key is provided, writes `${DENIED_API_KEY}`. |
+| `--dry-run` | Print planned changes without writing files. |
+| `--no-auto-accept` | Do not set `hooks_auto_accept: true`. |
+
+Examples:
+
+```bash
+npx @denied-dev/denied-hermes-hook status
+```
+
+```bash
+npx @denied-dev/denied-hermes-hook install \
+  --api-key "your-api-key" \
+  --fail-mode closed \
+  --yes
+```
+
+```bash
+npx @denied-dev/denied-hermes-hook install --dry-run --yes
+```
+
+```bash
+npx @denied-dev/denied-hermes-hook update
+```
+
+```bash
+npx @denied-dev/denied-hermes-hook uninstall
+```
+
+For Docker deployments using the upstream Hermes layout, `~/.hermes` on the host is mounted into the container as `/opt/data`. Target that directory explicitly:
+
+```bash
+npx @denied-dev/denied-hermes-hook install --data-dir /opt/data
+```
+
+## Configuration
+
+The installer writes `~/.hermes/denied.json`. You can edit it manually after install:
 
 ```json
 {
@@ -55,7 +132,13 @@ Create `~/.hermes/denied.json`:
 }
 ```
 
-Set the API key as an environment variable:
+To keep secrets out of the config file, use non-interactive install without `--api-key`:
+
+```bash
+npx @denied-dev/denied-hermes-hook install --yes
+```
+
+This writes `"apiKey": "${DENIED_API_KEY}"`. Then set the API key in the Hermes environment:
 
 ```bash
 export DENIED_API_KEY="your-api-key"
@@ -84,7 +167,35 @@ You can also point the hook at a different config file:
 export DENIED_CONFIG="/path/to/denied.json"
 ```
 
-### Step 3: Register the Hermes hook
+## Hermes Hook Registration
+
+The installer updates `~/.hermes/config.yaml` automatically. A typical installed entry looks like this:
+
+```yaml
+hooks:
+  pre_tool_call:
+    - matcher: ".*"
+      command: "node /Users/alice/.hermes/agent-hooks/denied-hermes-hook.js"
+      timeout: 15
+
+hooks_auto_accept: true
+```
+
+Use `status` to verify the installed registration:
+
+```bash
+npx @denied-dev/denied-hermes-hook status
+```
+
+## Manual Install Fallback
+
+If you cannot use a package manager, copy `denied-hermes-hook.js` into your Hermes data directory:
+
+```bash
+mkdir -p ~/.hermes/agent-hooks
+cp denied-hermes-hook.js ~/.hermes/agent-hooks/denied-hermes-hook.js
+chmod +x ~/.hermes/agent-hooks/denied-hermes-hook.js
+```
 
 Add this to `~/.hermes/config.yaml`:
 
@@ -92,23 +203,15 @@ Add this to `~/.hermes/config.yaml`:
 hooks:
   pre_tool_call:
     - matcher: ".*"
-      command: "node /opt/data/agent-hooks/denied-hermes-hook.js"
+      command: "node ~/.hermes/agent-hooks/denied-hermes-hook.js"
       timeout: 15
 
 hooks_auto_accept: true
 ```
 
-For non-Docker local Hermes, this command may be more convenient:
+Then create `~/.hermes/denied.json` using the configuration example above.
 
-```yaml
-hooks:
-  pre_tool_call:
-    - matcher: ".*"
-      command: "node ~/.hermes/agent-hooks/denied-hermes-hook.js"
-      timeout: 15
-```
-
-### Step 4: Docker environment
+## Docker Environment
 
 For Docker, pass the Denied environment variables to the Hermes container:
 
@@ -121,13 +224,56 @@ services:
       - DENIED_API_KEY=your-api-key
       - DENIED_URL=https://api.denied.dev
       - DENIED_FAIL_MODE=open
-      - DENIED_TIMEOUT_MS=15000
 ```
 
 Restart Hermes after changing hook configuration:
 
 ```bash
 docker compose restart hermes
+```
+
+## Local Installer Testing
+
+To test the installer without touching your real Hermes config, use a temporary data directory:
+
+```bash
+TEST_HERMES_DIR="$(mktemp -d)"
+
+npx @denied-dev/denied-hermes-hook install \
+  --data-dir "$TEST_HERMES_DIR" \
+  --api-key "test-api-key" \
+  --yes
+```
+
+Inspect the result:
+
+```bash
+find "$TEST_HERMES_DIR" -maxdepth 3 -type f -print
+cat "$TEST_HERMES_DIR/config.yaml"
+cat "$TEST_HERMES_DIR/denied.json"
+```
+
+For local package tarball testing before publishing:
+
+```bash
+pnpm --dir extensions/hermes pack --pack-destination /tmp
+
+TEST_HERMES_DIR="$(mktemp -d)"
+
+npx --yes \
+  --package /tmp/denied-dev-denied-hermes-hook-0.5.2.tgz \
+  denied-hermes-hook install \
+  --data-dir "$TEST_HERMES_DIR" \
+  --api-key "test-api-key" \
+  --yes
+```
+
+The direct `npx /tmp/package.tgz install` form does not work because it tries to execute the tarball file itself.
+
+Automated tests:
+
+```bash
+pnpm --dir extensions/hermes test
 ```
 
 ## How It Works

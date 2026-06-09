@@ -23,14 +23,18 @@
     "email": "support@denied.dev"
   },
   "bin": {
-    "denied-hermes-hook": "./denied-hermes-hook.js"
+    "denied-hermes-hook": "./denied-hermes-cli.js"
   },
   "files": [
+    "./denied-hermes-cli.js",
     "./denied-hermes-hook.js",
     "./denied.example.json",
     "./README.md"
   ],
   "scripts": {
     "test": "pnpm --dir ../../typescript exec vitest run --root ../extensions/hermes --config vitest.config.mjs"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.1"
   }
 }
