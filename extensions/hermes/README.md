@@ -5,37 +5,27 @@ call, Hermes receives a native block response and the tool does not run.
 
 ## Quick Install
 
-Until the plugin is published as a standalone Hermes plugin repository, install
-it from this monorepo by cloning the repo and copying the `extensions/hermes`
-plugin directory into Hermes.
+Install from a local clone:
 
 ```bash
-tmp_dir="$(mktemp -d)"
-hermes_home="${HERMES_HOME:-$HOME/.hermes}"
-git clone --depth 1 https://github.com/denied-dev/denied-sdk.git "$tmp_dir/denied-sdk"
-
-uv pip install --python "$hermes_home/hermes-agent/venv/bin/python" -e "$tmp_dir/denied-sdk/python"
-uv pip install --python "$hermes_home/hermes-agent/venv/bin/python" -e "$tmp_dir/denied-sdk/extensions/hermes"
-
-rm -rf "$hermes_home/plugins/denied"
-mkdir -p "$hermes_home/plugins/denied/src"
-cp "$tmp_dir/denied-sdk/extensions/hermes/__init__.py" \
-  "$tmp_dir/denied-sdk/extensions/hermes/plugin.yaml" \
-  "$tmp_dir/denied-sdk/extensions/hermes/README.md" \
-  "$tmp_dir/denied-sdk/extensions/hermes/pyproject.toml" \
-  "$hermes_home/plugins/denied/"
-cp -R "$tmp_dir/denied-sdk/extensions/hermes/src/denied_hermes" \
-  "$hermes_home/plugins/denied/src/"
-
-hermes plugins enable denied
-rm -rf "$tmp_dir"
+git clone https://github.com/denied-dev/denied-sdk.git
+cd denied-sdk
+extensions/hermes/install.sh
 ```
+
+Install with `curl`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/denied-dev/denied-sdk/main/extensions/hermes/install.sh | bash
+```
+
+The installer uses Hermes' Python virtual environment and `pip`;
 
 Restart Hermes or start a new Hermes session after enabling the plugin.
 For non-default Hermes profiles, export `HERMES_HOME` before running the install
 commands and before starting Hermes.
 
-Verify installation:
+Verify that Hermes sees the plugin:
 
 ```bash
 hermes plugins list | rg denied
@@ -47,32 +37,23 @@ Expected status:
 denied    enabled
 ```
 
-## Future Direct Git Install
+## Docker Install
 
-Hermes can install plugins directly from Git when `plugin.yaml` is at the
-repository root:
-
-```bash
-hermes plugins install owner/repo --enable
-```
-
-When this plugin is published as a dedicated repository, the install command
-will be:
+If Hermes runs in a container, run the installer inside that container so it
+uses the same Python virtual environment as Hermes:
 
 ```bash
-hermes plugins install denied-dev/denied-hermes-plugin --enable
+curl -fsSL https://raw.githubusercontent.com/denied-dev/denied-sdk/main/extensions/hermes/install.sh \
+  | docker exec -i hermes bash
 ```
 
-The plugin manifest declares `pip_dependencies: ["denied-sdk>=0.5.2"]`, and
-the Python package also declares `denied-sdk` as a runtime dependency. The plugin
-does not import `denied_sdk` at discovery time; it imports the SDK only when the
-authorization hook is constructed or maps a tool call. This follows Hermes'
-dependency-loading guidance and avoids disabling plugin discovery just because a
-dependency has not been installed yet.
+If the container cannot download from the network, copy a local clone into it:
 
-Do not use `hermes plugins install denied-dev/denied-sdk --enable` for the
-current monorepo layout. Hermes will clone the repository root, not the
-`extensions/hermes` subdirectory.
+```bash
+git clone https://github.com/denied-dev/denied-sdk.git
+docker cp denied-sdk hermes:/tmp/denied-sdk
+docker exec hermes bash /tmp/denied-sdk/extensions/hermes/install.sh
+```
 
 ## Configure
 
@@ -163,17 +144,9 @@ Audit records are written to:
 $HERMES_HOME/denied-audit/denied-hermes-hook.jsonl
 ```
 
-## Smoke Test
+## Verify Blocking
 
-Check that Hermes' Python runtime can import the plugin:
-
-```bash
-hermes_home="${HERMES_HOME:-$HOME/.hermes}"
-PYTHONPATH="$hermes_home/plugins/denied/src" \
-  "$hermes_home/hermes-agent/venv/bin/python" -c "from denied_hermes.plugin import DeniedHermesPlugin; p = DeniedHermesPlugin(); print({'url': p.config.url, 'fail_mode': p.config.fail_mode, 'has_api_key': bool(p.config.api_key)}); p.close()"
-```
-
-Test fail-closed behavior:
+To verify fail-closed behavior, point Denied at an unavailable local endpoint:
 
 ```bash
 export DENIED_API_KEY="test"
@@ -186,8 +159,10 @@ message containing `fail-mode is closed`.
 
 ## Troubleshooting
 
-- Plugin not listed: confirm files exist under `$HERMES_HOME/plugins/denied` and
-  run `hermes plugins enable denied`.
-- Import error for `denied_sdk`: install the SDK into Hermes' Python runtime:
-  `uv pip install --python "$HERMES_HOME/hermes-agent/venv/bin/python" denied-sdk`.
+- Plugin not listed: rerun the installer and confirm `HERMES_HOME` points to the
+  same profile Hermes uses.
+- Tool calls still run when Denied is unavailable: set
+  `DENIED_FAIL_MODE=closed` and restart Hermes.
 - Config changes not taking effect: restart Hermes or start a new session.
+- Container install does not work: run the installer inside the Hermes container,
+  not on the host.
