@@ -13,13 +13,35 @@
         "enum": ["open", "closed"],
         "default": "open"
       },
-      "timeout": { "type": "number" }
+      "timeout": { "type": "number" },
+      "request": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "includeToolInput": { "type": "boolean", "default": true },
+          "includeHookPayload": { "type": "boolean", "default": true },
+          "maxContextBytes": { "type": "number", "default": 20000 }
+        }
+      },
+      "audit": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": false },
+          "dir": { "type": "string" },
+          "includeRawPayload": { "type": "boolean", "default": true },
+          "includeMappedRequest": { "type": "boolean", "default": true },
+          "includeDecision": { "type": "boolean", "default": true }
+        }
+      }
     }
   },
   "uiHints": {
     "deniedUrl": { "label": "Denied base URL" },
     "deniedApiKey": { "label": "Denied API Key", "sensitive": true },
     "failMode": { "label": "Fail mode (open or closed)" },
-    "timeout": { "label": "Timeout (in milliseconds)" }
+    "timeout": { "label": "Timeout (in milliseconds)" },
+    "request": { "label": "Request context options" },
+    "audit": { "label": "Audit log options" }
   }
 }

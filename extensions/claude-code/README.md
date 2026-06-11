@@ -58,12 +58,40 @@ When a tool call is blocked, Claude Code will display the denial reason inline. 
 
 ## Configuration reference
 
-| Environment variable | Default                  | Description                                                       |
-| -------------------- | ------------------------ | ----------------------------------------------------------------- |
-| `DENIED_API_KEY`     | —                        | Required. API key for the Denied PDP.                             |
-| `DENIED_URL`         | `https://api.denied.dev` | PDP endpoint. Only change for custom deployments.                 |
-| `DENIED_FAIL_MODE`   | `open`                   | `open` = allow on error, `closed` = deny when PDP is unreachable. |
-| `DENIED_TIMEOUT_MS`  | `15000`                  | Timeout in milliseconds.                                          |
+Settings resolve in this order: **environment variable** → **config file** → built-in default. Environment variables always win when present.
+
+| Environment variable | Config file key (`~/.denied/config.json`) | Default                  | Description                                                       |
+| -------------------- | ----------------------------------------- | ------------------------ | ----------------------------------------------------------------- |
+| `DENIED_API_KEY`     | `apiKey`                                   | —                        | Required. API key for the Denied PDP.                             |
+| `DENIED_URL`         | `url`                                      | `https://api.denied.dev` | PDP endpoint. Only change for custom deployments.                 |
+| `DENIED_FAIL_MODE`   | `failMode`                                 | `open`                   | `open` = allow on error, `closed` = deny when PDP is unreachable. |
+| `DENIED_TIMEOUT_MS`  | `timeoutMs`                                | `15000`                  | Timeout in milliseconds.                                          |
+| `DENIED_CONFIG`      | —                                          | `~/.denied/config.json`  | Path to the JSON config file. Set to read config from elsewhere.  |
+
+Example `~/.denied/config.json`:
+
+```json
+{
+  "apiKey": "your-api-key",
+  "url": "https://api.denied.dev",
+  "failMode": "open",
+  "timeoutMs": 15000,
+  "request": {
+    "includeToolInput": true,
+    "includeHookPayload": true,
+    "maxContextBytes": 20000
+  },
+  "audit": {
+    "enabled": false,
+    "dir": "~/.denied/audit",
+    "includeRawPayload": true,
+    "includeMappedRequest": true,
+    "includeDecision": true
+  }
+}
+```
+
+`request.includeToolInput` controls whether raw tool input is sent as bounded request context. `request.maxContextBytes` replaces oversized JSON values with a `{ "truncated": true, ... }` preview. When `audit.enabled` is true, local JSONL debug records are written to `~/.denied/audit/denied-claude-code-hook.jsonl` by default.
 
 ## Default behavior
 
@@ -93,7 +121,7 @@ For each tool call, the plugin sends an authorization check to the Denied server
 
 - **Subject**: `claude-code://<sessionId>` with `cwd` and `permission_mode` as properties
 - **Action**: `execute`
-- **Resource**: `tool://<toolName>` with `tool_input` and `tool_use_id` as properties
+- **Resource**: `tool://<toolName>` with `tool_use_id` and, by default, bounded `tool_input` as properties
 
 The Denied server evaluates the request against your policies and returns allow or deny. If denied, the block reason is fed back to the agent so it can adapt its behavior.
 

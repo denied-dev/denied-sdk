@@ -8,6 +8,7 @@ const path = require("node:path");
 const DEFAULT_URL = "https://api.denied.dev";
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_FAIL_MODE = "open"; // "open" | "closed"
+const DEFAULT_CONTEXT_MAX_BYTES = 20_000;
 
 // Codex's own config file (config.toml) offers no way to set environment
 // variables for hooks, so an `export` is the only env option and it lasts only
@@ -50,6 +51,18 @@ function resolveConfig(env, fileConfig) {
     : Number.isFinite(fileConfig.timeoutMs)
       ? fileConfig.timeoutMs
       : DEFAULT_TIMEOUT_MS;
+  const requestConfig =
+    fileConfig.request && typeof fileConfig.request === "object"
+      ? fileConfig.request
+      : {};
+  const auditConfig =
+    fileConfig.audit && typeof fileConfig.audit === "object"
+      ? fileConfig.audit
+      : {};
+  const maxContextBytes = positiveInteger(
+    requestConfig.maxContextBytes,
+    DEFAULT_CONTEXT_MAX_BYTES,
+  );
 
   return {
     url: env.DENIED_URL || fileConfig.url || DEFAULT_URL,
@@ -60,6 +73,19 @@ function resolveConfig(env, fileConfig) {
       DEFAULT_FAIL_MODE
     ).toLowerCase(),
     timeoutMs,
+    includeToolInput: requestConfig.includeToolInput !== false,
+    includeHookPayload: requestConfig.includeHookPayload !== false,
+    maxContextBytes,
+    audit: {
+      enabled: auditConfig.enabled === true,
+      dir:
+        typeof auditConfig.dir === "string" && auditConfig.dir
+          ? expandHome(auditConfig.dir, os.homedir())
+          : path.join(os.homedir(), ".denied", "audit"),
+      includeRawPayload: auditConfig.includeRawPayload !== false,
+      includeMappedRequest: auditConfig.includeMappedRequest !== false,
+      includeDecision: auditConfig.includeDecision !== false,
+    },
   };
 }
 
@@ -74,6 +100,38 @@ const CONFIG = resolveConfig(
 // ---------------------------------------------------------------------------
 // Pure logic (exported for unit testing)
 // ---------------------------------------------------------------------------
+
+function positiveInteger(value, fallback) {
+  const parsed = parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function expandHome(value, homedir) {
+  return value === "~" || value.startsWith("~/")
+    ? path.join(homedir, value.slice(2))
+    : value;
+}
+
+function truncateJsonValue(value, maxBytes) {
+  let raw;
+  let serializable = value;
+  try {
+    raw = JSON.stringify(value);
+  } catch {
+    serializable = String(value);
+    raw = JSON.stringify(serializable);
+  }
+  const originalBytes = Buffer.byteLength(raw, "utf-8");
+  if (originalBytes <= maxBytes) {
+    return serializable;
+  }
+  return {
+    truncated: true,
+    max_bytes: maxBytes,
+    original_bytes: originalBytes,
+    preview: raw.slice(0, maxBytes),
+  };
+}
 
 // Builds the AuthZEN evaluation request body from the Codex hook input.
 
@@ -90,7 +148,27 @@ const CONFIG = resolveConfig(
 //     tool_use_id: Tool-call id for this invocation
 //     tool_input: Tool-specific input. `Bash` and `apply_patch` use `tool_input.command` while MCP tools send all arguments.
 
-function buildCheckBody(input) {
+function buildCheckBody(input, config = CONFIG) {
+  const toolInput =
+    input.tool_input && typeof input.tool_input === "object"
+      ? input.tool_input
+      : {};
+  const properties = {
+    tool_use_id: input.tool_use_id || "unknown",
+  };
+  if (config.includeToolInput) {
+    properties.tool_input = truncateJsonValue(toolInput, config.maxContextBytes);
+  }
+
+  const context = {
+    integration: "denied-codex-hook",
+    hook_event_name: input.hook_event_name,
+    authz_direction: "agent-to-world",
+  };
+  if (config.includeHookPayload) {
+    context.hook_payload = truncateJsonValue(input, config.maxContextBytes);
+  }
+
   return {
     subject: {
       type: "codex",
@@ -107,11 +185,9 @@ function buildCheckBody(input) {
     resource: {
       type: "tool",
       id: input.tool_name ?? "unknown",
-      properties: {
-        tool_input: input.tool_input || {},
-        tool_use_id: input.tool_use_id || "unknown",
-      },
+      properties,
     },
+    context,
   };
 }
 
@@ -189,6 +265,36 @@ function failSafe(message) {
   }
 }
 
+function appendAuditRecord(input, body, decision, config = CONFIG) {
+  if (!config.audit?.enabled) {
+    return;
+  }
+
+  try {
+    fs.mkdirSync(config.audit.dir, { recursive: true });
+    const record = {
+      timestamp: new Date().toISOString(),
+    };
+    if (config.audit.includeRawPayload) {
+      record.hook_payload = truncateJsonValue(input, config.maxContextBytes);
+    }
+    if (config.audit.includeMappedRequest) {
+      record.mapped_request = truncateJsonValue(body, config.maxContextBytes);
+    }
+    if (config.audit.includeDecision) {
+      record.decision = truncateJsonValue(decision, config.maxContextBytes);
+    }
+    fs.appendFileSync(
+      path.join(config.audit.dir, "denied-codex-hook.jsonl"),
+      `${JSON.stringify(record)}\n`,
+      "utf-8",
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[denied-dev] Failed to write audit record: ${message}\n`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Read stdin (Codex streams the hook context as JSON)
 // ---------------------------------------------------------------------------
@@ -221,7 +327,7 @@ async function main() {
     return;
   }
 
-  const body = buildCheckBody(input);
+  const body = buildCheckBody(input, CONFIG);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), CONFIG.timeoutMs);
@@ -240,11 +346,14 @@ async function main() {
     });
 
     if (!res.ok) {
-      failSafe(`HTTP ${res.status}: ${await res.text()}`);
+      const error = { error: `HTTP ${res.status}: ${await res.text()}` };
+      appendAuditRecord(input, body, error, CONFIG);
+      failSafe(error.error);
       return;
     }
 
     const data = await res.json();
+    appendAuditRecord(input, body, data, CONFIG);
     const outcome = interpretDecision(data);
 
     if (outcome.kind === "allow") {
@@ -259,6 +368,7 @@ async function main() {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    appendAuditRecord(input, body, { error: message }, CONFIG);
     failSafe(`Failed to reach Denied PDP: ${message}`);
   } finally {
     clearTimeout(timer);
@@ -277,7 +387,9 @@ module.exports = {
   resolveConfigPath,
   loadFileConfig,
   resolveConfig,
+  truncateJsonValue,
   buildCheckBody,
+  appendAuditRecord,
   interpretDecision,
   resolveFailSafe,
   buildDenyOutput,

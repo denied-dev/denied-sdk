@@ -12,7 +12,9 @@ const {
   resolveConfigPath,
   loadFileConfig,
   resolveConfig,
+  truncateJsonValue,
   buildCheckBody,
+  appendAuditRecord,
   interpretDecision,
   resolveFailSafe,
   buildDenyOutput,
@@ -65,6 +67,16 @@ test("resolveConfig falls back to defaults with no env or file", () => {
     apiKey: "",
     failMode: "open",
     timeoutMs: 15000,
+    includeToolInput: true,
+    includeHookPayload: true,
+    maxContextBytes: 20000,
+    audit: {
+      enabled: false,
+      dir: path.join(os.homedir(), ".denied", "audit"),
+      includeRawPayload: true,
+      includeMappedRequest: true,
+      includeDecision: true,
+    },
   });
 });
 
@@ -89,12 +101,10 @@ test("resolveConfig lets environment variables override the file", () => {
     },
     { apiKey: "dn_file", url: "https://file", failMode: "open", timeoutMs: 5000 },
   );
-  assert.deepEqual(cfg, {
-    url: "https://env",
-    apiKey: "dn_env",
-    failMode: "closed",
-    timeoutMs: 1000,
-  });
+  assert.equal(cfg.url, "https://env");
+  assert.equal(cfg.apiKey, "dn_env");
+  assert.equal(cfg.failMode, "closed");
+  assert.equal(cfg.timeoutMs, 1000);
 });
 
 test("resolveConfig ignores a non-numeric DENIED_TIMEOUT_MS and uses the file value", () => {
@@ -131,6 +141,20 @@ test("buildCheckBody maps a full input to an AuthZEN request", () => {
         tool_use_id: "use-1",
       },
     },
+    context: {
+      integration: "denied-codex-hook",
+      hook_event_name: undefined,
+      authz_direction: "agent-to-world",
+      hook_payload: {
+        session_id: "sess-1",
+        cwd: "/work",
+        permission_mode: "ask",
+        model: "gpt-5-codex",
+        tool_name: "shell",
+        tool_input: { command: "ls" },
+        tool_use_id: "use-1",
+      },
+    },
   });
 });
 
@@ -145,6 +169,61 @@ test("buildCheckBody fills defaults for missing fields", () => {
   assert.equal(body.resource.id, "unknown");
   assert.deepEqual(body.resource.properties.tool_input, {});
   assert.equal(body.resource.properties.tool_use_id, "unknown");
+  assert.equal(body.context.integration, "denied-codex-hook");
+});
+
+test("buildCheckBody honors request context flags", () => {
+  const body = buildCheckBody(
+    { tool_input: { command: "ls" }, tool_use_id: "use-1" },
+    {
+      includeToolInput: false,
+      includeHookPayload: false,
+      maxContextBytes: 20000,
+    },
+  );
+
+  assert.deepEqual(body.resource.properties, { tool_use_id: "use-1" });
+  assert.equal("hook_payload" in body.context, false);
+});
+
+test("truncateJsonValue returns a Hermes-style preview for oversized values", () => {
+  const value = truncateJsonValue({ command: "x".repeat(50) }, 20);
+
+  assert.equal(value.truncated, true);
+  assert.equal(value.max_bytes, 20);
+  assert.equal(typeof value.original_bytes, "number");
+  assert.equal(typeof value.preview, "string");
+});
+
+test("appendAuditRecord writes configured sections", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "denied-codex-audit-"));
+  try {
+    appendAuditRecord(
+      { tool_input: { command: "ls" } },
+      { resource: { id: "shell" } },
+      { decision: true },
+      {
+        maxContextBytes: 20000,
+        audit: {
+          enabled: true,
+          dir,
+          includeRawPayload: true,
+          includeMappedRequest: false,
+          includeDecision: true,
+        },
+      },
+    );
+    const record = JSON.parse(
+      fs.readFileSync(path.join(dir, "denied-codex-hook.jsonl"), "utf-8"),
+    );
+    assert.deepEqual(Object.keys(record).sort(), [
+      "decision",
+      "hook_payload",
+      "timestamp",
+    ]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("interpretDecision allows on decision === true", () => {

@@ -84,9 +84,23 @@ Example `~/.denied/config.json`:
   "apiKey": "your-api-key",
   "url": "https://api.denied.dev",
   "failMode": "open",
-  "timeoutMs": 15000
+  "timeoutMs": 15000,
+  "request": {
+    "includeToolInput": true,
+    "includeHookPayload": true,
+    "maxContextBytes": 20000
+  },
+  "audit": {
+    "enabled": false,
+    "dir": "~/.denied/audit",
+    "includeRawPayload": true,
+    "includeMappedRequest": true,
+    "includeDecision": true
+  }
 }
 ```
+
+`request.includeToolInput` controls whether raw tool input is sent as bounded request context. `request.maxContextBytes` replaces oversized JSON values with a `{ "truncated": true, ... }` preview. When `audit.enabled` is true, local JSONL debug records are written to `~/.denied/audit/denied-codex-hook.jsonl` by default.
 
 ## Default behavior
 
@@ -108,7 +122,7 @@ For each tool call, the plugin sends an authorization check to the Denied server
 
 - **Subject**: `codex://<sessionId>` with `cwd` and `permission_mode` as properties
 - **Action**: `execute`
-- **Resource**: `tool://<toolName>` with `tool_input` and `tool_use_id` as properties
+- **Resource**: `tool://<toolName>` with `tool_use_id` and, by default, bounded `tool_input` as properties
 
 The Denied server evaluates the request against your policies and returns allow or deny. If denied, the block reason is fed back to the agent so it can adapt its behavior.
 
