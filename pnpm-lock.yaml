@@ -6,12 +6,6 @@ settings:
 
 importers:
 
-  extensions/hermes:
-    dependencies:
-      js-yaml:
-        specifier: ^4.1.1
-        version: 4.1.1
-
   extensions/openclaw:
     dependencies:
       '@denied-dev/sdk':

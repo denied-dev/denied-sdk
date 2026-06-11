@@ -13,7 +13,7 @@ from denied_sdk import CheckResponse, CheckResponseContext
 from denied_hermes.config import AuditConfig, ConfigError, PluginConfig, resolve_config
 from denied_hermes.mapper import ContextMapper, infer_shell_effect, payload_from_hook
 from denied_hermes.plugin import DeniedHermesPlugin, register
-from denied_hermes.redaction import redact_value
+from denied_hermes.redaction import redact_value, truncate_json_value
 
 
 @pytest.fixture(autouse=True)
@@ -516,6 +516,29 @@ def test_redacts_circular_payload_without_recursing_forever():
 
     assert redacted["token"] == "[REDACTED]"
     assert redacted["self"] == "[Circular]"
+
+
+def test_redacts_circular_list_without_recursing_forever():
+    payload: list[Any] = ["secret-token"]
+    payload.append(payload)
+
+    redacted = redact_value(payload, ["token"])
+
+    assert redacted == ["secret-token", "[Circular]"]
+
+
+def test_truncate_json_value_limits_preview_by_bytes():
+    value = {"message": "😀" * 20}
+    max_bytes = 20
+    raw = json.dumps(value, separators=(",", ":"), default=str, ensure_ascii=False)
+
+    truncated = truncate_json_value(value, max_bytes)
+
+    assert truncated["truncated"] is True
+    assert truncated["preview"] == raw.encode("utf-8")[:max_bytes].decode(
+        "utf-8", errors="replace"
+    )
+    assert truncated["preview"] != raw[:max_bytes]
 
 
 def test_uses_generic_tool_resources_when_semantic_mapping_disabled():

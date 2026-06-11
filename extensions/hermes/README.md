@@ -3,6 +3,12 @@
 Denied checks Hermes Agent tool calls before they execute. If policy denies a
 call, Hermes receives a native block response and the tool does not run.
 
+## Supported Platforms
+
+The installer supports macOS and Linux environments with Bash and standard Unix
+tools. On Windows, run it from WSL or install the plugin manually in the Hermes
+runtime environment.
+
 ## Quick Install
 
 Install from a local clone:
