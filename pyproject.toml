@@ -1,0 +1,77 @@
+[project]
+name = "denied-sdk-workspace"
+version = "0.0.0"
+description = "Repository-level developer tooling for Denied SDK"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = [
+    "python",
+    "extensions/hermes",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+exclude = [
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "*.egg-info",
+    "*.md",
+    "node_modules",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "N",
+    "UP",
+    "B",
+    "C4",
+    "PT",
+    "Q",
+    "PTH",
+]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.pytest.ini_options]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--strict-config",
+]
+
+[tool.pyright]
+include = [
+    "extensions/hermes/__init__.py",
+    "extensions/hermes/src",
+    "extensions/hermes/tests",
+]
+extraPaths = [
+    "extensions/hermes/src",
+    "python/src",
+]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"

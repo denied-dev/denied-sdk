@@ -1,0 +1,12 @@
+name: denied
+version: "0.5.2"
+description: Denied authorization checks for Hermes tool calls
+provides_hooks:
+  - pre_tool_call
+pip_dependencies:
+  - denied-sdk>=0.5.2
+requires_env:
+  - name: DENIED_API_KEY
+    description: API key for the Denied authorization service
+    url: https://app.denied.dev
+    secret: true

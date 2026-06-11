@@ -7,10 +7,12 @@ node_modules/
 # IDE
 .vscode/
 .idea/
+.codex/
 
 # Environment
 .env
 .env.local
+.venv/
 
 # Build outputs
 dist/

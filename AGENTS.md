@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Overview
 
@@ -9,7 +9,7 @@ This is a monorepo containing SDK implementations for the Denied authorization p
 - **Python SDK** (`/python`): Python 3.10+ client using httpx and Pydantic
 - **TypeScript SDK** (`/typescript`): TypeScript/JavaScript client using axios
 - **OpenClaw extension** (`/extensions/openclaw`): OpenClaw plugin that enforces authorization on every tool call
-- **Claude Code extension** (`/extensions/claude-code`): Claude Code hook plugin that enforces authorization on every tool call
+- **Codex extension** (`/extensions/codex`): Codex hook plugin that enforces authorization on every tool call
 - **Hermes extension** (`/extensions/hermes`): Hermes Agent Python plugin that enforces authorization before tool calls
 
 Both SDKs provide identical functionality for interacting with a Denied authorization server following the Authzen Authorization API 1.0 specification to check permissions for subjects performing actions on resources.
@@ -310,8 +310,8 @@ denied-sdk/
 │   └── tsconfig.json            # TypeScript compiler config
 │
 └── extensions/
-    ├── claude-code/
-    │   ├── .claude-plugin/
+    ├── Codex/
+    │   ├── .Codex-plugin/
     │   │   └── plugin.json       # Plugin manifest (name, version)
     │   ├── hooks/
     │   │   ├── hooks.json        # PreToolUse hook registration
@@ -359,12 +359,12 @@ The plugin (`extensions/openclaw`) registers a `before_tool_call` hook via `api.
 
 Config is declared in `openclaw.plugin.json` (`configSchema` + `uiHints`) and read in `index.ts` via `api.pluginConfig`. The TypeScript type `DeniedPluginConfig` in `src/types.ts` must stay in sync with the JSON Schema in the manifest.
 
-### Claude Code Extension Design
+### Codex Extension Design
 
-The plugin (`extensions/claude-code`) registers a `PreToolUse` hook via Claude Code's hook system. It is a zero-dependency Node.js script that uses native `fetch` (Node 18+). For each tool call:
+The plugin (`extensions/Codex`) registers a `PreToolUse` hook via Codex's hook system. It is a zero-dependency Node.js script that uses native `fetch` (Node 18+). For each tool call:
 
-1. Claude Code streams the hook context as JSON to stdin (session ID, tool name, tool input, permission mode, cwd)
-2. The interceptor builds an AuthZEN evaluation request with subject `claude-code/<sessionId>`, action `execute`, and resource `tool/<toolName>`
+1. Codex streams the hook context as JSON to stdin (session ID, tool name, tool input, permission mode, cwd)
+2. The interceptor builds an AuthZEN evaluation request with subject `Codex/<sessionId>`, action `execute`, and resource `tool/<toolName>`
 3. It sends a POST to the Denied PDP (`/pdp/check`) with the API key in the `X-API-Key` header
 4. If the decision is `false`, the tool call is denied and the reason is returned to the agent
 5. If the Denied server is unreachable, the plugin follows the `DENIED_FAIL_MODE` setting: `open` (default) allows the call, `closed` denies it
@@ -373,10 +373,10 @@ Configuration is via environment variables (`DENIED_API_KEY`, `DENIED_URL`, `DEN
 
 ### Codex CLI Extension Design
 
-The plugin (`extensions/codex`) registers a `PreToolUse` hook via Codex's hook system. It is a zero-dependency Node.js script (Node 18+) that reuses the same interceptor pattern as the Claude Code extension. For each tool call:
+The plugin (`extensions/codex`) registers a `PreToolUse` hook via Codex's hook system. It is a zero-dependency Node.js script (Node 18+) that reuses the same interceptor pattern as the Codex extension. For each tool call:
 
 1. Codex streams the hook context as JSON to stdin (session ID, tool name, tool input, permission mode, cwd, tool use ID)
-2. The interceptor builds an AuthZEN evaluation request with subject `codex/<sessionId>`, action `execute`, and resource `tool/<toolName>` — the subject `type` is `codex` (vs. `claude-code`) so policies can distinguish agents
+2. The interceptor builds an AuthZEN evaluation request with subject `codex/<sessionId>`, action `execute`, and resource `tool/<toolName>` — the subject `type` is `codex` (vs. `Codex`) so policies can distinguish agents
 3. It sends a POST to the Denied PDP (`/pdp/check`) with the API key in the `X-API-Key` header
 4. If the decision is `false`, the tool call is denied via `hookSpecificOutput.permissionDecision: "deny"` and the reason is returned to the agent
 5. If the Denied server is unreachable, the plugin follows the `DENIED_FAIL_MODE` setting: `open` (default) allows the call, `closed` denies it
@@ -385,7 +385,7 @@ Configuration resolves per-setting in the order: environment variable → JSON c
 
 `hooks/hooks.json` resolves the interceptor path via `${PLUGIN_ROOT}` (Codex's canonical env var for installed plugin roots). Codex requires the user to review and trust the hook definition via the `/hooks` command before it will execute on first run.
 
-The Codex marketplace manifest lives at the repo root in `.agents/plugins/marketplace.json` (Codex's preferred path; differs in schema from Claude's `.claude-plugin/marketplace.json` — the two coexist).
+The Codex marketplace manifest lives at the repo root in `.agents/plugins/marketplace.json` (Codex's preferred path; differs in schema from Codex's `.Codex-plugin/marketplace.json` — the two coexist).
 
 ### Hermes Extension Design
 
@@ -468,10 +468,10 @@ Tests inject a fake Denied client and run entirely in process. Keep tests isolat
 - Current monorepo install flow copies `extensions/hermes` into `$HERMES_HOME/plugins/denied` and enables it with `hermes plugins enable denied`
 - A future standalone plugin repository can use `hermes plugins install <owner>/<repo> --enable` when `plugin.yaml` lives at the repository root
 
-**Claude Code extension**:
+**Codex extension**:
 
-- No build step — plain JavaScript executed directly by Claude Code's hook runner
-- No versioned package; installed as a Claude Code plugin via `claude plugin install`
+- No build step — plain JavaScript executed directly by Codex's hook runner
+- No versioned package; installed as a Codex plugin via `Codex plugin install`
 - Configuration is via environment variables (no package config)
 
 ## Error Handling
