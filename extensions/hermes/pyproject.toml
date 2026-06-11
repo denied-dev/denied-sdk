@@ -1,6 +1,6 @@
 [project]
 name = "denied-hermes-plugin"
-version = "0.5.2"
+version = "0.5.3"
 description = "Denied authorization plugin for Hermes Agent"
 authors = [{ name = "Denied Technologies", email = "support@denied.dev" }]
 license = "Apache-2.0"
