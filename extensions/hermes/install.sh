@@ -31,6 +31,16 @@ Environment:
 EOF
 }
 
+check_supported_platform() {
+  case "$(uname -s 2>/dev/null || true)" in
+    Darwin|Linux)
+      ;;
+    *)
+      die "This installer supports macOS and Linux. On Windows, run it from WSL or install the Hermes plugin manually."
+      ;;
+  esac
+}
+
 abspath() {
   local path="$1"
   if command -v python3 >/dev/null 2>&1; then
@@ -150,6 +160,8 @@ run_install() {
         ;;
     esac
   done
+
+  check_supported_platform
 
   local repo_root
   if ! repo_root="$(find_repo_root)"; then

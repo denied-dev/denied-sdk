@@ -9,7 +9,7 @@ This is a monorepo containing SDK implementations for the Denied authorization p
 - **Python SDK** (`/python`): Python 3.10+ client using httpx and Pydantic
 - **TypeScript SDK** (`/typescript`): TypeScript/JavaScript client using axios
 - **OpenClaw extension** (`/extensions/openclaw`): OpenClaw plugin that enforces authorization on every tool call
-- **Codex extension** (`/extensions/Codex`): Codex hook plugin that enforces authorization on every tool call
+- **Codex extension** (`/extensions/codex`): Codex hook plugin that enforces authorization on every tool call
 - **Hermes extension** (`/extensions/hermes`): Hermes Agent Python plugin that enforces authorization before tool calls
 
 Both SDKs provide identical functionality for interacting with a Denied authorization server following the Authzen Authorization API 1.0 specification to check permissions for subjects performing actions on resources.

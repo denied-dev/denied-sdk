@@ -42,13 +42,14 @@ def redact_value(
     value: Any, redact_keys: list[str], seen: set[int] | None = None
 ) -> Any:
     seen = seen or set()
-    if isinstance(value, list):
-        return [redact_value(item, redact_keys, seen) for item in value]
-    if isinstance(value, dict):
+    if isinstance(value, list | dict):
         value_id = id(value)
         if value_id in seen:
             return "[Circular]"
         seen.add(value_id)
+    if isinstance(value, list):
+        return [redact_value(item, redact_keys, seen) for item in value]
+    if isinstance(value, dict):
         return {
             key: "[REDACTED]"
             if is_sensitive_key(str(key), redact_keys)
@@ -61,13 +62,14 @@ def redact_value(
 
 
 def truncate_json_value(value: Any, max_bytes: int) -> Any:
-    raw = json.dumps(value, separators=(",", ":"), default=str)
-    original_bytes = len(raw.encode("utf-8"))
+    raw = json.dumps(value, separators=(",", ":"), default=str, ensure_ascii=False)
+    raw_bytes = raw.encode("utf-8")
+    original_bytes = len(raw_bytes)
     if original_bytes <= max_bytes:
         return value
     return {
         "truncated": True,
         "max_bytes": max_bytes,
         "original_bytes": original_bytes,
-        "preview": raw[:max_bytes],
+        "preview": raw_bytes[:max_bytes].decode("utf-8", errors="replace"),
     }
