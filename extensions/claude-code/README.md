@@ -93,6 +93,8 @@ Example `~/.denied/config.json`:
 
 `request.includeToolInput` controls whether raw tool input is sent as bounded request context. `request.maxContextBytes` replaces oversized JSON values with a `{ "truncated": true, ... }` preview. When `audit.enabled` is true, local JSONL debug records are written to `~/.denied/audit/denied-claude-code-hook.jsonl` by default.
 
+> **Security note:** Audit logs may contain sensitive data. When `audit.enabled` is true, `audit.includeRawPayload`, `audit.includeMappedRequest`, `request.includeToolInput`, and `request.includeHookPayload` default to `true`, so audit records can include full tool inputs, hook payloads, file contents, shell commands, URLs, and credentials. Store audit logs only in a location with appropriate access controls.
+
 ## Default behavior
 
 **Default-deny**: With no policies configured in Denied, every tool call is blocked. This is intentional — you must explicitly define the boundaries for your agent by creating policies in the [Denied dashboard](https://app.denied.dev).

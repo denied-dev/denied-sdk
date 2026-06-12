@@ -1,7 +1,7 @@
 // Denied SDK – Codex CLI PreToolUse interceptor
 // Zero dependencies. Requires Node.js 18+ (native fetch).
 
-const fs = require("node:fs");
+const fs = require("node:fs").promises;
 const os = require("node:os");
 const path = require("node:path");
 
@@ -17,6 +17,18 @@ const DEFAULT_CONTEXT_MAX_BYTES = 20_000;
 // (~/.denied/config.json, override with DENIED_CONFIG), then built-in defaults.
 // Environment variables always win when present.
 
+
+function positiveInteger(value, fallback) {
+  const parsed = parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function expandHome(value, homedir) {
+  return value === "~" || value.startsWith("~/")
+    ? path.join(homedir, value.slice(2))
+    : value;
+}
+
 function resolveConfigPath(env, homedir) {
   if (env.DENIED_CONFIG) {
     return env.DENIED_CONFIG;
@@ -26,10 +38,10 @@ function resolveConfigPath(env, homedir) {
 
 // Reads and parses the JSON config file. Returns {} when missing or invalid;
 // surfaces a malformed-file warning so silent misconfiguration is debuggable.
-function loadFileConfig(configPath, warn = () => {}) {
+async function loadFileConfig(configPath, warn = () => { }) {
   let raw;
   try {
-    raw = fs.readFileSync(configPath, "utf-8");
+    raw = await fs.readFile(configPath, "utf-8");
   } catch {
     return {};
   }
@@ -69,7 +81,7 @@ function resolveConfig(env, fileConfig) {
     apiKey: env.DENIED_API_KEY || fileConfig.apiKey || "",
     failMode: (
       env.DENIED_FAIL_MODE ||
-      fileConfig.failMode ||
+      (typeof fileConfig.failMode === "string" ? fileConfig.failMode : "") ||
       DEFAULT_FAIL_MODE
     ).toLowerCase(),
     timeoutMs,
@@ -89,28 +101,16 @@ function resolveConfig(env, fileConfig) {
   };
 }
 
-const CONFIG = resolveConfig(
-  process.env,
-  loadFileConfig(
-    resolveConfigPath(process.env, os.homedir()),
-    (message) => process.stderr.write(`[denied-dev] ${message}\n`),
-  ),
-);
-
-// ---------------------------------------------------------------------------
-// Pure logic (exported for unit testing)
-// ---------------------------------------------------------------------------
-
-function positiveInteger(value, fallback) {
-  const parsed = parseInt(value ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+async function loadRuntimeConfig(
+  env = process.env,
+  homedir = os.homedir(),
+  warn = (message) => process.stderr.write(`[denied-dev] ${message}\n`),
+) {
+  const fileConfig = await loadFileConfig(resolveConfigPath(env, homedir), warn);
+  return resolveConfig(env, fileConfig);
 }
 
-function expandHome(value, homedir) {
-  return value === "~" || value.startsWith("~/")
-    ? path.join(homedir, value.slice(2))
-    : value;
-}
+const DEFAULT_CONFIG = resolveConfig(process.env, {});
 
 function truncateJsonValue(value, maxBytes) {
   let raw;
@@ -129,8 +129,17 @@ function truncateJsonValue(value, maxBytes) {
     truncated: true,
     max_bytes: maxBytes,
     original_bytes: originalBytes,
-    preview: raw.slice(0, maxBytes),
+    preview: truncateUtf8(raw, maxBytes),
   };
+}
+
+function truncateUtf8(value, maxBytes) {
+  const buffer = Buffer.from(value, "utf-8");
+  let end = Math.max(0, Math.min(maxBytes, buffer.length));
+  while (end > 0 && (buffer[end] & 0xc0) === 0x80) {
+    end -= 1;
+  }
+  return buffer.subarray(0, end).toString("utf-8");
 }
 
 // Builds the AuthZEN evaluation request body from the Codex hook input.
@@ -148,7 +157,7 @@ function truncateJsonValue(value, maxBytes) {
 //     tool_use_id: Tool-call id for this invocation
 //     tool_input: Tool-specific input. `Bash` and `apply_patch` use `tool_input.command` while MCP tools send all arguments.
 
-function buildCheckBody(input, config = CONFIG) {
+function buildCheckBody(input, config = DEFAULT_CONFIG) {
   const toolInput =
     input.tool_input && typeof input.tool_input === "object"
       ? input.tool_input
@@ -255,9 +264,9 @@ function deny(reason) {
   process.stdout.write(JSON.stringify(buildDenyOutput(reason)));
 }
 
-function failSafe(message) {
+function failSafe(message, config = DEFAULT_CONFIG) {
   process.stderr.write(`[denied-dev] ${message}\n`);
-  const outcome = resolveFailSafe(CONFIG.failMode, message);
+  const outcome = resolveFailSafe(config.failMode, message);
   if (outcome.kind === "deny") {
     deny(outcome.reason);
   } else {
@@ -265,13 +274,13 @@ function failSafe(message) {
   }
 }
 
-function appendAuditRecord(input, body, decision, config = CONFIG) {
+async function appendAuditRecord(input, body, decision, config = DEFAULT_CONFIG) {
   if (!config.audit?.enabled) {
     return;
   }
 
   try {
-    fs.mkdirSync(config.audit.dir, { recursive: true });
+    await fs.mkdir(config.audit.dir, { recursive: true });
     const record = {
       timestamp: new Date().toISOString(),
     };
@@ -284,7 +293,7 @@ function appendAuditRecord(input, body, decision, config = CONFIG) {
     if (config.audit.includeDecision) {
       record.decision = truncateJsonValue(decision, config.maxContextBytes);
     }
-    fs.appendFileSync(
+    await fs.appendFile(
       path.join(config.audit.dir, "denied-codex-hook.jsonl"),
       `${JSON.stringify(record)}\n`,
       "utf-8",
@@ -312,9 +321,12 @@ async function readStdin() {
 // ---------------------------------------------------------------------------
 
 async function main() {
-  if (!CONFIG.apiKey) {
+  const config = await loadRuntimeConfig();
+
+  if (!config.apiKey) {
     failSafe(
       "No API key found. Set DENIED_API_KEY or add \"apiKey\" to ~/.denied/config.json. Skipping authorization check.",
+      config,
     );
     return;
   }
@@ -323,22 +335,22 @@ async function main() {
   try {
     input = await readStdin();
   } catch {
-    failSafe("Failed to parse hook stdin.");
+    failSafe("Failed to parse hook stdin.", config);
     return;
   }
 
-  const body = buildCheckBody(input, CONFIG);
+  const body = buildCheckBody(input, config);
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), CONFIG.timeoutMs);
+  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
 
   try {
     const headers = {
       "Content-Type": "application/json",
-      "X-API-Key": CONFIG.apiKey,
+      "X-API-Key": config.apiKey,
     };
 
-    const res = await fetch(`${CONFIG.url}/pdp/check`, {
+    const res = await fetch(`${config.url}/pdp/check`, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
@@ -347,13 +359,13 @@ async function main() {
 
     if (!res.ok) {
       const error = { error: `HTTP ${res.status}: ${await res.text()}` };
-      appendAuditRecord(input, body, error, CONFIG);
-      failSafe(error.error);
+      await appendAuditRecord(input, body, error, config);
+      failSafe(error.error, config);
       return;
     }
 
     const data = await res.json();
-    appendAuditRecord(input, body, data, CONFIG);
+    await appendAuditRecord(input, body, data, config);
     const outcome = interpretDecision(data);
 
     if (outcome.kind === "allow") {
@@ -364,12 +376,12 @@ async function main() {
       );
       deny(outcome.reason);
     } else {
-      failSafe(outcome.reason);
+      failSafe(outcome.reason, config);
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    appendAuditRecord(input, body, { error: message }, CONFIG);
-    failSafe(`Failed to reach Denied PDP: ${message}`);
+    await appendAuditRecord(input, body, { error: message }, config);
+    failSafe(`Failed to reach Denied PDP: ${message}`, config);
   } finally {
     clearTimeout(timer);
   }
@@ -386,6 +398,7 @@ if (require.main === module) {
 module.exports = {
   resolveConfigPath,
   loadFileConfig,
+  loadRuntimeConfig,
   resolveConfig,
   truncateJsonValue,
   buildCheckBody,

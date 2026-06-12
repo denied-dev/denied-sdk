@@ -150,6 +150,8 @@ Audit records are written to:
 $HERMES_HOME/denied-audit/denied-hermes-hook.jsonl
 ```
 
+> **Security note:** Audit logs may contain sensitive data. When `audit.enabled` is true, `audit.includeRawPayload`, `audit.includeMappedRequest`, `request.includeToolInput`, and `request.includeHookPayload` default to `true`, so audit records can include full tool inputs, hook payloads, file contents, shell commands, URLs, and credentials. Store audit logs only in a location with appropriate access controls.
+
 ## Verify Blocking
 
 To verify fail-closed behavior, point Denied at an unavailable local endpoint:

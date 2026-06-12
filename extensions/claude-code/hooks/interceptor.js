@@ -1,7 +1,7 @@
 // Denied SDK – Claude Code PreToolUse interceptor
 // Zero dependencies. Requires Node.js 18+ (native fetch).
 
-const fs = require("node:fs");
+const fs = require("node:fs").promises;
 const os = require("node:os");
 const path = require("node:path");
 
@@ -17,10 +17,10 @@ function resolveConfigPath(env, homedir) {
   return path.join(homedir, ".denied", "config.json");
 }
 
-function loadFileConfig(configPath, warn = () => { }) {
+async function loadFileConfig(configPath, warn = () => { }) {
   let raw;
   try {
-    raw = fs.readFileSync(configPath, "utf-8");
+    raw = await fs.readFile(configPath, "utf-8");
   } catch {
     return {};
   }
@@ -65,7 +65,7 @@ function resolveConfig(env, fileConfig) {
     apiKey: env.DENIED_API_KEY || fileConfig.apiKey || "",
     failMode: (
       env.DENIED_FAIL_MODE ||
-      fileConfig.failMode ||
+      (typeof fileConfig.failMode === "string" ? fileConfig.failMode : "") ||
       DEFAULT_FAIL_MODE
     ).toLowerCase(),
     timeoutMs,
@@ -88,13 +88,16 @@ function resolveConfig(env, fileConfig) {
   };
 }
 
-const CONFIG = resolveConfig(
-  process.env,
-  loadFileConfig(
-    resolveConfigPath(process.env, os.homedir()),
-    (message) => process.stderr.write(`[denied-dev] ${message}\n`),
-  ),
-);
+async function loadRuntimeConfig(
+  env = process.env,
+  homedir = os.homedir(),
+  warn = (message) => process.stderr.write(`[denied-dev] ${message}\n`),
+) {
+  const fileConfig = await loadFileConfig(resolveConfigPath(env, homedir), warn);
+  return resolveConfig(env, fileConfig);
+}
+
+const DEFAULT_CONFIG = resolveConfig(process.env, {});
 
 // ---------------------------------------------------------------------------
 // Pure logic (exported for unit testing)
@@ -131,11 +134,20 @@ function truncateJsonValue(value, maxBytes) {
     truncated: true,
     max_bytes: maxBytes,
     original_bytes: originalBytes,
-    preview: raw.slice(0, maxBytes),
+    preview: truncateUtf8(raw, maxBytes),
   };
 }
 
-function buildCheckBody(input, config = CONFIG) {
+function truncateUtf8(value, maxBytes) {
+  const buffer = Buffer.from(value, "utf-8");
+  let end = Math.max(0, Math.min(maxBytes, buffer.length));
+  while (end > 0 && (buffer[end] & 0xc0) === 0x80) {
+    end -= 1;
+  }
+  return buffer.subarray(0, end).toString("utf-8");
+}
+
+function buildCheckBody(input, config = DEFAULT_CONFIG) {
   const toolInput =
     input.tool_input && typeof input.tool_input === "object"
       ? input.tool_input
@@ -240,9 +252,9 @@ function deny(reason) {
   process.stdout.write(JSON.stringify(buildDecisionOutput("deny", reason)));
 }
 
-function failSafe(message) {
+function failSafe(message, config = DEFAULT_CONFIG) {
   process.stderr.write(`[denied-dev] ${message}\n`);
-  const outcome = resolveFailSafe(CONFIG.failMode, message);
+  const outcome = resolveFailSafe(config.failMode, message);
   if (outcome.kind === "deny") {
     deny(outcome.reason);
   } else {
@@ -250,13 +262,13 @@ function failSafe(message) {
   }
 }
 
-function appendAuditRecord(input, body, decision, config = CONFIG) {
+async function appendAuditRecord(input, body, decision, config = DEFAULT_CONFIG) {
   if (!config.audit?.enabled) {
     return;
   }
 
   try {
-    fs.mkdirSync(config.audit.dir, { recursive: true });
+    await fs.mkdir(config.audit.dir, { recursive: true });
     const record = {
       timestamp: new Date().toISOString(),
     };
@@ -269,7 +281,7 @@ function appendAuditRecord(input, body, decision, config = CONFIG) {
     if (config.audit.includeDecision) {
       record.decision = truncateJsonValue(decision, config.maxContextBytes);
     }
-    fs.appendFileSync(
+    await fs.appendFile(
       path.join(config.audit.dir, "denied-claude-code-hook.jsonl"),
       `${JSON.stringify(record)}\n`,
       "utf-8",
@@ -297,8 +309,10 @@ async function readStdin() {
 // ---------------------------------------------------------------------------
 
 async function main() {
-  if (!CONFIG.apiKey) {
-    failSafe("DENIED_API_KEY is not set. Skipping authorization check.");
+  const config = await loadRuntimeConfig();
+
+  if (!config.apiKey) {
+    failSafe("DENIED_API_KEY is not set. Skipping authorization check.", config);
     return;
   }
 
@@ -306,22 +320,22 @@ async function main() {
   try {
     input = await readStdin();
   } catch {
-    failSafe("Failed to parse hook stdin.");
+    failSafe("Failed to parse hook stdin.", config);
     return;
   }
 
-  const body = buildCheckBody(input, CONFIG);
+  const body = buildCheckBody(input, config);
 
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), CONFIG.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), config.timeoutMs);
 
     const headers = {
       "Content-Type": "application/json",
-      "X-API-Key": CONFIG.apiKey,
+      "X-API-Key": config.apiKey,
     };
 
-    const res = await fetch(`${CONFIG.url}/pdp/check`, {
+    const res = await fetch(`${config.url}/pdp/check`, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
@@ -332,13 +346,13 @@ async function main() {
 
     if (!res.ok) {
       const error = { error: `HTTP ${res.status}: ${await res.text()}` };
-      appendAuditRecord(input, body, error, CONFIG);
-      failSafe(error.error);
+      await appendAuditRecord(input, body, error, config);
+      failSafe(error.error, config);
       return;
     }
 
     const data = await res.json();
-    appendAuditRecord(input, body, data, CONFIG);
+    await appendAuditRecord(input, body, data, config);
     const outcome = interpretDecision(data);
 
     if (outcome.kind === "allow") {
@@ -349,12 +363,12 @@ async function main() {
       );
       deny(outcome.reason);
     } else {
-      failSafe(outcome.reason);
+      failSafe(outcome.reason, config);
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    appendAuditRecord(input, body, { error: message }, CONFIG);
-    failSafe(`Failed to reach Denied PDP: ${message}`);
+    await appendAuditRecord(input, body, { error: message }, config);
+    failSafe(`Failed to reach Denied PDP: ${message}`, config);
   }
 }
 
@@ -369,6 +383,7 @@ if (require.main === module) {
 module.exports = {
   resolveConfigPath,
   loadFileConfig,
+  loadRuntimeConfig,
   resolveConfig,
   truncateJsonValue,
   buildCheckBody,

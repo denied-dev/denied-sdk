@@ -4,13 +4,14 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const fs = require("node:fs");
+const fs = require("node:fs").promises;
 const os = require("node:os");
 const path = require("node:path");
 
 const {
   resolveConfigPath,
   loadFileConfig,
+  loadRuntimeConfig,
   resolveConfig,
   truncateJsonValue,
   buildCheckBody,
@@ -34,30 +35,30 @@ test("resolveConfigPath honors the DENIED_CONFIG override", () => {
   );
 });
 
-test("loadFileConfig returns {} when the file is missing", () => {
+test("loadFileConfig returns {} when the file is missing", async () => {
   const missing = path.join(os.tmpdir(), `denied-missing-${Date.now()}.json`);
-  assert.deepEqual(loadFileConfig(missing), {});
+  assert.deepEqual(await loadFileConfig(missing), {});
 });
 
-test("loadFileConfig parses a valid JSON file", () => {
+test("loadFileConfig parses a valid JSON file", async () => {
   const file = path.join(os.tmpdir(), `denied-cfg-${Date.now()}.json`);
-  fs.writeFileSync(file, JSON.stringify({ apiKey: "dn_file", url: "https://f" }));
+  await fs.writeFile(file, JSON.stringify({ apiKey: "dn_file", url: "https://f" }));
   try {
-    assert.deepEqual(loadFileConfig(file), { apiKey: "dn_file", url: "https://f" });
+    assert.deepEqual(await loadFileConfig(file), { apiKey: "dn_file", url: "https://f" });
   } finally {
-    fs.unlinkSync(file);
+    await fs.unlink(file);
   }
 });
 
-test("loadFileConfig warns and returns {} on malformed JSON", () => {
+test("loadFileConfig warns and returns {} on malformed JSON", async () => {
   const file = path.join(os.tmpdir(), `denied-bad-${Date.now()}.json`);
-  fs.writeFileSync(file, "{ not json");
+  await fs.writeFile(file, "{ not json");
   let warned = "";
   try {
-    assert.deepEqual(loadFileConfig(file, (m) => (warned = m)), {});
+    assert.deepEqual(await loadFileConfig(file, (m) => (warned = m)), {});
     assert.match(warned, /malformed config file/);
   } finally {
-    fs.unlinkSync(file);
+    await fs.unlink(file);
   }
 });
 
@@ -109,6 +110,23 @@ test("resolveConfig lets environment variables override the file", () => {
 
 test("resolveConfig ignores a non-numeric DENIED_TIMEOUT_MS and uses the file value", () => {
   assert.equal(resolveConfig({ DENIED_TIMEOUT_MS: "abc" }, { timeoutMs: 7000 }).timeoutMs, 7000);
+});
+
+test("resolveConfig ignores a non-string file failMode", () => {
+  assert.equal(resolveConfig({}, { failMode: 42 }).failMode, "open");
+});
+
+test("loadRuntimeConfig resolves config from the async file loader", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "denied-codex-config-"));
+  const file = path.join(dir, "config.json");
+  await fs.writeFile(file, JSON.stringify({ apiKey: "dn_file", failMode: "closed" }));
+  try {
+    const cfg = await loadRuntimeConfig({ DENIED_CONFIG: file }, os.homedir());
+    assert.equal(cfg.apiKey, "dn_file");
+    assert.equal(cfg.failMode, "closed");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("buildCheckBody maps a full input to an AuthZEN request", () => {
@@ -195,10 +213,18 @@ test("truncateJsonValue returns a Hermes-style preview for oversized values", ()
   assert.equal(typeof value.preview, "string");
 });
 
-test("appendAuditRecord writes configured sections", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "denied-codex-audit-"));
+test("truncateJsonValue caps previews by UTF-8 byte length", () => {
+  const value = truncateJsonValue({ command: "😀".repeat(20) }, 15);
+
+  assert.equal(value.truncated, true);
+  assert.equal(Buffer.byteLength(value.preview, "utf-8") <= value.max_bytes, true);
+  assert.equal(value.preview.includes("\uFFFD"), false);
+});
+
+test("appendAuditRecord writes configured sections", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "denied-codex-audit-"));
   try {
-    appendAuditRecord(
+    await appendAuditRecord(
       { tool_input: { command: "ls" } },
       { resource: { id: "shell" } },
       { decision: true },
@@ -214,7 +240,7 @@ test("appendAuditRecord writes configured sections", () => {
       },
     );
     const record = JSON.parse(
-      fs.readFileSync(path.join(dir, "denied-codex-hook.jsonl"), "utf-8"),
+      await fs.readFile(path.join(dir, "denied-codex-hook.jsonl"), "utf-8"),
     );
     assert.deepEqual(Object.keys(record).sort(), [
       "decision",
@@ -222,7 +248,7 @@ test("appendAuditRecord writes configured sections", () => {
       "timestamp",
     ]);
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    await fs.rm(dir, { recursive: true, force: true });
   }
 });
 

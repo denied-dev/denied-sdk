@@ -46,8 +46,17 @@ function truncateJsonValue(value: unknown, maxBytes: number): unknown {
     truncated: true,
     max_bytes: maxBytes,
     original_bytes: originalBytes,
-    preview: raw.slice(0, maxBytes),
+    preview: truncateUtf8(raw, maxBytes),
   };
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  const buffer = Buffer.from(value, "utf-8");
+  let end = Math.max(0, Math.min(maxBytes, buffer.length));
+  while (end > 0 && (buffer[end] & 0xc0) === 0x80) {
+    end -= 1;
+  }
+  return buffer.subarray(0, end).toString("utf-8");
 }
 
 export default function createDeniedHook(config: DeniedPluginConfig) {
