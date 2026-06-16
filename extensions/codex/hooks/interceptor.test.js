@@ -4,15 +4,18 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const fs = require("node:fs");
+const fs = require("node:fs").promises;
 const os = require("node:os");
 const path = require("node:path");
 
 const {
   resolveConfigPath,
   loadFileConfig,
+  loadRuntimeConfig,
   resolveConfig,
+  truncateJsonValue,
   buildCheckBody,
+  appendAuditRecord,
   interpretDecision,
   resolveFailSafe,
   buildDenyOutput,
@@ -32,30 +35,30 @@ test("resolveConfigPath honors the DENIED_CONFIG override", () => {
   );
 });
 
-test("loadFileConfig returns {} when the file is missing", () => {
+test("loadFileConfig returns {} when the file is missing", async () => {
   const missing = path.join(os.tmpdir(), `denied-missing-${Date.now()}.json`);
-  assert.deepEqual(loadFileConfig(missing), {});
+  assert.deepEqual(await loadFileConfig(missing), {});
 });
 
-test("loadFileConfig parses a valid JSON file", () => {
+test("loadFileConfig parses a valid JSON file", async () => {
   const file = path.join(os.tmpdir(), `denied-cfg-${Date.now()}.json`);
-  fs.writeFileSync(file, JSON.stringify({ apiKey: "dn_file", url: "https://f" }));
+  await fs.writeFile(file, JSON.stringify({ apiKey: "dn_file", url: "https://f" }));
   try {
-    assert.deepEqual(loadFileConfig(file), { apiKey: "dn_file", url: "https://f" });
+    assert.deepEqual(await loadFileConfig(file), { apiKey: "dn_file", url: "https://f" });
   } finally {
-    fs.unlinkSync(file);
+    await fs.unlink(file);
   }
 });
 
-test("loadFileConfig warns and returns {} on malformed JSON", () => {
+test("loadFileConfig warns and returns {} on malformed JSON", async () => {
   const file = path.join(os.tmpdir(), `denied-bad-${Date.now()}.json`);
-  fs.writeFileSync(file, "{ not json");
+  await fs.writeFile(file, "{ not json");
   let warned = "";
   try {
-    assert.deepEqual(loadFileConfig(file, (m) => (warned = m)), {});
+    assert.deepEqual(await loadFileConfig(file, (m) => (warned = m)), {});
     assert.match(warned, /malformed config file/);
   } finally {
-    fs.unlinkSync(file);
+    await fs.unlink(file);
   }
 });
 
@@ -65,6 +68,16 @@ test("resolveConfig falls back to defaults with no env or file", () => {
     apiKey: "",
     failMode: "open",
     timeoutMs: 15000,
+    includeToolInput: true,
+    includeHookPayload: true,
+    maxContextBytes: 20000,
+    audit: {
+      enabled: false,
+      dir: path.join(os.homedir(), ".denied", "audit"),
+      includeRawPayload: true,
+      includeMappedRequest: true,
+      includeDecision: true,
+    },
   });
 });
 
@@ -89,16 +102,31 @@ test("resolveConfig lets environment variables override the file", () => {
     },
     { apiKey: "dn_file", url: "https://file", failMode: "open", timeoutMs: 5000 },
   );
-  assert.deepEqual(cfg, {
-    url: "https://env",
-    apiKey: "dn_env",
-    failMode: "closed",
-    timeoutMs: 1000,
-  });
+  assert.equal(cfg.url, "https://env");
+  assert.equal(cfg.apiKey, "dn_env");
+  assert.equal(cfg.failMode, "closed");
+  assert.equal(cfg.timeoutMs, 1000);
 });
 
 test("resolveConfig ignores a non-numeric DENIED_TIMEOUT_MS and uses the file value", () => {
   assert.equal(resolveConfig({ DENIED_TIMEOUT_MS: "abc" }, { timeoutMs: 7000 }).timeoutMs, 7000);
+});
+
+test("resolveConfig ignores a non-string file failMode", () => {
+  assert.equal(resolveConfig({}, { failMode: 42 }).failMode, "open");
+});
+
+test("loadRuntimeConfig resolves config from the async file loader", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "denied-codex-config-"));
+  const file = path.join(dir, "config.json");
+  await fs.writeFile(file, JSON.stringify({ apiKey: "dn_file", failMode: "closed" }));
+  try {
+    const cfg = await loadRuntimeConfig({ DENIED_CONFIG: file }, os.homedir());
+    assert.equal(cfg.apiKey, "dn_file");
+    assert.equal(cfg.failMode, "closed");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("buildCheckBody maps a full input to an AuthZEN request", () => {
@@ -131,6 +159,20 @@ test("buildCheckBody maps a full input to an AuthZEN request", () => {
         tool_use_id: "use-1",
       },
     },
+    context: {
+      integration: "denied-codex-hook",
+      hook_event_name: undefined,
+      authz_direction: "agent-to-world",
+      hook_payload: {
+        session_id: "sess-1",
+        cwd: "/work",
+        permission_mode: "ask",
+        model: "gpt-5-codex",
+        tool_name: "shell",
+        tool_input: { command: "ls" },
+        tool_use_id: "use-1",
+      },
+    },
   });
 });
 
@@ -145,6 +187,69 @@ test("buildCheckBody fills defaults for missing fields", () => {
   assert.equal(body.resource.id, "unknown");
   assert.deepEqual(body.resource.properties.tool_input, {});
   assert.equal(body.resource.properties.tool_use_id, "unknown");
+  assert.equal(body.context.integration, "denied-codex-hook");
+});
+
+test("buildCheckBody honors request context flags", () => {
+  const body = buildCheckBody(
+    { tool_input: { command: "ls" }, tool_use_id: "use-1" },
+    {
+      includeToolInput: false,
+      includeHookPayload: false,
+      maxContextBytes: 20000,
+    },
+  );
+
+  assert.deepEqual(body.resource.properties, { tool_use_id: "use-1" });
+  assert.equal("hook_payload" in body.context, false);
+});
+
+test("truncateJsonValue returns a Hermes-style preview for oversized values", () => {
+  const value = truncateJsonValue({ command: "x".repeat(50) }, 20);
+
+  assert.equal(value.truncated, true);
+  assert.equal(value.max_bytes, 20);
+  assert.equal(typeof value.original_bytes, "number");
+  assert.equal(typeof value.preview, "string");
+});
+
+test("truncateJsonValue caps previews by UTF-8 byte length", () => {
+  const value = truncateJsonValue({ command: "😀".repeat(20) }, 15);
+
+  assert.equal(value.truncated, true);
+  assert.equal(Buffer.byteLength(value.preview, "utf-8") <= value.max_bytes, true);
+  assert.equal(value.preview.includes("\uFFFD"), false);
+});
+
+test("appendAuditRecord writes configured sections", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "denied-codex-audit-"));
+  try {
+    await appendAuditRecord(
+      { tool_input: { command: "ls" } },
+      { resource: { id: "shell" } },
+      { decision: true },
+      {
+        maxContextBytes: 20000,
+        audit: {
+          enabled: true,
+          dir,
+          includeRawPayload: true,
+          includeMappedRequest: false,
+          includeDecision: true,
+        },
+      },
+    );
+    const record = JSON.parse(
+      await fs.readFile(path.join(dir, "denied-codex-hook.jsonl"), "utf-8"),
+    );
+    assert.deepEqual(Object.keys(record).sort(), [
+      "decision",
+      "hook_payload",
+      "timestamp",
+    ]);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("interpretDecision allows on decision === true", () => {

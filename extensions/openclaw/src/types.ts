@@ -22,6 +22,18 @@ export type DeniedPluginConfig = {
   deniedApiKey?: string;
   failMode?: "open" | "closed";
   timeout?: number;
+  request?: {
+    includeToolInput?: boolean;
+    includeHookPayload?: boolean;
+    maxContextBytes?: number;
+  };
+  audit?: {
+    enabled?: boolean;
+    dir?: string;
+    includeRawPayload?: boolean;
+    includeMappedRequest?: boolean;
+    includeDecision?: boolean;
+  };
 };
 
 export type PluginRegisterApi = {

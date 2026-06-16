@@ -1,5 +1,5 @@
 name: denied
-version: "0.5.2"
+version: "0.5.3"
 description: Denied authorization checks for Hermes tool calls
 provides_hooks:
   - pre_tool_call

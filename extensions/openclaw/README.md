@@ -32,7 +32,19 @@ Alternatively, add the config directly in `~/.openclaw/openclaw.json`:
       "denied-openclaw-plugin": {
         "enabled": true,
         "config": {
-          "deniedApiKey": "your-api-key"
+          "deniedApiKey": "your-api-key",
+          "request": {
+            "includeToolInput": true,
+            "includeHookPayload": true,
+            "maxContextBytes": 20000
+          },
+          "audit": {
+            "enabled": false,
+            "dir": "~/.denied/audit",
+            "includeRawPayload": true,
+            "includeMappedRequest": true,
+            "includeDecision": true
+          }
         }
       }
     }
@@ -117,12 +129,24 @@ When working correctly, you'll see lines like:
 
 ## Configuration reference
 
-| Config key     | Environment variable | Default                  | Description                                       |
-| -------------- | -------------------- | ------------------------ | ------------------------------------------------- |
-| `deniedApiKey` | `DENIED_API_KEY`     | —                        | Required. API key for the Denied PDP.             |
-| `deniedUrl`    | `DENIED_URL`         | `https://api.denied.dev` | PDP endpoint. Only change for custom deployments. |
-| `failMode`     | `DENIED_FAIL_MODE`   | `open`                   | `open` = allow when PDP errors, `closed` = deny.  |
-| `timeout`      | `DENIED_TIMEOUT_MS`  | `15000`                  | Timeout in milliseconds.                          |
+| Config key                       | Environment variable | Default                  | Description                                       |
+| -------------------------------- | -------------------- | ------------------------ | ------------------------------------------------- |
+| `deniedApiKey`                   | `DENIED_API_KEY`     | —                        | Required. API key for the Denied PDP.             |
+| `deniedUrl`                      | `DENIED_URL`         | `https://api.denied.dev` | PDP endpoint. Only change for custom deployments. |
+| `failMode`                       | `DENIED_FAIL_MODE`   | `open`                   | `open` = allow when PDP errors, `closed` = deny.  |
+| `timeout`                        | `DENIED_TIMEOUT_MS`  | `15000`                  | Timeout in milliseconds.                          |
+| `request.includeToolInput`       | —                    | `true`                   | Include raw tool parameters in the PDP request.   |
+| `request.includeHookPayload`     | —                    | `true`                   | Include the raw hook payload in request context.  |
+| `request.maxContextBytes`        | —                    | `20000`                  | Maximum bytes for each JSON context value.        |
+| `audit.enabled`                  | —                    | `false`                  | Write local JSONL debug records when true.        |
+| `audit.dir`                      | —                    | `~/.denied/audit`        | Directory for `denied-openclaw-hook.jsonl`.       |
+| `audit.includeRawPayload`        | —                    | `true`                   | Include raw hook payload in audit records.        |
+| `audit.includeMappedRequest`     | —                    | `true`                   | Include mapped PDP request in audit records.      |
+| `audit.includeDecision`          | —                    | `true`                   | Include PDP decision or error in audit records.   |
+
+Oversized request and audit values are replaced with a `{ "truncated": true, ... }` preview using `request.maxContextBytes`.
+
+> **Security note:** Audit logs may contain sensitive data. When `audit.enabled` is true, `audit.includeRawPayload`, `audit.includeMappedRequest`, `request.includeToolInput`, and `request.includeHookPayload` default to `true`, so audit records can include full tool inputs, hook payloads, file contents, shell commands, URLs, and credentials. Store audit logs only in a location with appropriate access controls.
 
 ## Default behavior
 
@@ -140,7 +164,7 @@ For each tool call, the plugin sends an authorization check to the Denied server
 
 - **Subject**: `openclaw://<agentId>` with the session key as a property
 - **Action**: `execute`
-- **Resource**: `tool://<toolName>` with the tool parameters as properties
+- **Resource**: `tool://<toolName>` with, by default, bounded tool parameters in `tool_input`
 
 The Denied server evaluates the request against your policies and returns allow or deny. If denied, the block reason is surfaced to the agent so it can adapt its behavior.
 
