@@ -13,8 +13,12 @@ dependencies = [
 [tool.uv.sources]
 denied-sdk = { workspace = true }
 
+# Hermes' loader does ``getattr(ep.load(), "register")`` and expects ``ep.load()``
+# to return the *module*. A ``module:attr`` value makes it return the attribute,
+# so the loader finds no ``register`` and silently skips the plugin. Point at the
+# module only. Guarded by tests/test_entry_point.py.
 [project.entry-points."hermes_agent.plugins"]
-denied = "denied_hermes.plugin:register"
+denied = "denied_hermes.plugin"
 
 [dependency-groups]
 dev = [
