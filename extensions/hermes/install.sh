@@ -186,12 +186,37 @@ run_install() {
   log "Installing plugin runtime package into Hermes Python"
   "$hermes_python" -m pip install "$repo_root/extensions/hermes"
 
+  # The plugin is installed via BOTH mechanisms on purpose — they serve
+  # different Hermes subsystems and are not redundant:
+  #   * pip entry point  -> the runtime loader discovers + loads it (it scans
+  #                         entry points and, on key collision, the entry point
+  #                         wins, so it must resolve correctly — see below).
+  #   * ~/.hermes/plugins -> the management CLI (`hermes plugins enable/
+  #                         disable/list`) scans ONLY bundled + user
+  #                         directories, never entry points, so the directory
+  #                         copy is what makes the plugin CLI-manageable.
+  # Drop either one and you lose runtime loading or CLI management respectively.
   log "Copying plugin files to $plugin_dir"
   mkdir -p "$(dirname "$plugin_dir")"
   copy_plugin_files "$repo_root" "$plugin_dir"
 
-  log "Verifying plugin import"
-  PYTHONPATH="$plugin_dir/src" "$hermes_python" -c "from denied_hermes.plugin import DeniedHermesPlugin; plugin = DeniedHermesPlugin(); plugin.close()"
+  # Verify the plugin the way Hermes' runtime loader actually resolves it: load
+  # the entry point and confirm it yields a module exposing register(). A direct
+  # ``import`` would pass even when the entry point is broken, giving false
+  # confidence — the exact failure mode this plugin shipped with.
+  log "Verifying plugin entry point resolves to a registrable module"
+  "$hermes_python" - <<'PY'
+import importlib.metadata as m
+
+eps = [e for e in m.entry_points().select(group="hermes_agent.plugins") if e.name == "denied"]
+assert eps, "denied entry point not found in group 'hermes_agent.plugins' after install"
+module = eps[0].load()
+register = getattr(module, "register", None)
+assert callable(register), (
+    f"entry point '{eps[0].value}' did not resolve to a module exposing "
+    f"register(); Hermes would skip the plugin (got {register!r})"
+)
+PY
 
   if command -v hermes >/dev/null 2>&1; then
     log "Enabling Hermes plugin"
