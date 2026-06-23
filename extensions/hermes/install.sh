@@ -204,18 +204,31 @@ run_install() {
   # the entry point and confirm it yields a module exposing register(). A direct
   # ``import`` would pass even when the entry point is broken, giving false
   # confidence — the exact failure mode this plugin shipped with.
-  log "Verifying plugin entry point resolves to a registrable module"
+  #
+  # Then smoke-test the constructor: it lazily imports denied-sdk and builds the
+  # DeniedClient, so this is what catches denied-sdk installed into the wrong
+  # venv or a broken constructor — failures the entry-point check alone misses.
+  #
+  # Uses ``if``/``sys.exit`` rather than ``assert`` on purpose: asserts are
+  # stripped under ``python -O`` / ``PYTHONOPTIMIZE=1`` (some Docker images, CI
+  # hardening), which would let a broken install pass silently.
+  log "Verifying plugin entry point resolves and constructs"
   "$hermes_python" - <<'PY'
 import importlib.metadata as m
+import sys
 
 eps = [e for e in m.entry_points().select(group="hermes_agent.plugins") if e.name == "denied"]
-assert eps, "denied entry point not found in group 'hermes_agent.plugins' after install"
+if not eps:
+    sys.exit("denied entry point not found in group 'hermes_agent.plugins' after install")
 module = eps[0].load()
 register = getattr(module, "register", None)
-assert callable(register), (
-    f"entry point '{eps[0].value}' did not resolve to a module exposing "
-    f"register(); Hermes would skip the plugin (got {register!r})"
-)
+if not callable(register):
+    sys.exit(
+        f"entry point '{eps[0].value}' did not resolve to a module exposing "
+        f"register(); Hermes would skip the plugin (got {register!r})"
+    )
+# Construct the plugin (imports denied-sdk, builds the client) then tear it down.
+module.DeniedHermesPlugin().close()
 PY
 
   if command -v hermes >/dev/null 2>&1; then
