@@ -9,6 +9,7 @@ const DEFAULT_URL = "https://api.denied.dev";
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_FAIL_MODE = "open"; // "open" | "closed"
 const DEFAULT_CONTEXT_MAX_BYTES = 20_000;
+const DEFAULT_TAIL_BYTES = 65_536; // 64 KB tail window for the transcript read
 
 function resolveConfigPath(env, homedir) {
   if (env.DENIED_CONFIG) {
@@ -71,6 +72,7 @@ function resolveConfig(env, fileConfig) {
     timeoutMs,
     includeToolInput: requestConfig.includeToolInput !== false,
     includeHookPayload: requestConfig.includeHookPayload !== false,
+    includeLastUserPrompt: requestConfig.includeLastUserPrompt !== false,
     maxContextBytes: positiveInteger(
       requestConfig.maxContextBytes,
       DEFAULT_CONTEXT_MAX_BYTES,
@@ -147,7 +149,36 @@ function truncateUtf8(value, maxBytes) {
   return buffer.subarray(0, end).toString("utf-8");
 }
 
-function buildCheckBody(input, config = DEFAULT_CONFIG) {
+// Scans a transcript tail (newest content last) for the most recent
+// Claude Code `last-prompt` entry and returns its plain-string prompt.
+// Pure: no I/O. Returns null when no usable marker is found.
+function extractLastUserPrompt(text) {
+  const lines = text.split("\n");
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i].trim();
+    if (!line) {
+      continue;
+    }
+    let obj;
+    try {
+      // A mid-file tail window often starts with a partial line that fails
+      // to parse; we simply skip those and keep scanning backwards.
+      obj = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (
+      obj &&
+      obj.type === "last-prompt" &&
+      typeof obj.lastPrompt === "string"
+    ) {
+      return obj.lastPrompt;
+    }
+  }
+  return null;
+}
+
+function buildCheckBody(input, config = DEFAULT_CONFIG, lastUserPrompt = null) {
   const toolInput =
     input.tool_input && typeof input.tool_input === "object"
       ? input.tool_input
@@ -166,6 +197,12 @@ function buildCheckBody(input, config = DEFAULT_CONFIG) {
   };
   if (config.includeHookPayload) {
     context.hook_payload = truncateJsonValue(input, config.maxContextBytes);
+  }
+  if (config.includeLastUserPrompt && typeof lastUserPrompt === "string" && lastUserPrompt) {
+    context.last_user_prompt = truncateJsonValue(
+      lastUserPrompt,
+      config.maxContextBytes,
+    );
   }
 
   return {
@@ -292,6 +329,32 @@ async function appendAuditRecord(input, body, decision, config = DEFAULT_CONFIG)
   }
 }
 
+// Reads a bounded tail (Strategy B) of the session transcript and returns the
+// most recent user prompt, or null. Best-effort: any missing file, read error,
+// or absent marker resolves to null so the authorization decision is never
+// delayed or failed.
+async function readLastUserPrompt(transcriptPath, maxTailBytes = DEFAULT_TAIL_BYTES) {
+  if (!transcriptPath) {
+    return null;
+  }
+  let handle;
+  try {
+    handle = await fs.open(transcriptPath, "r");
+    const { size } = await handle.stat();
+    const length = Math.min(size, maxTailBytes);
+    const position = Math.max(0, size - maxTailBytes);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, position);
+    return extractLastUserPrompt(buffer.toString("utf-8"));
+  } catch {
+    return null;
+  } finally {
+    if (handle) {
+      await handle.close().catch(() => { });
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Read stdin (Claude Code streams the hook context as JSON)
 // ---------------------------------------------------------------------------
@@ -324,7 +387,12 @@ async function main() {
     return;
   }
 
-  const body = buildCheckBody(input, config);
+  let lastUserPrompt = null;
+  if (config.includeLastUserPrompt) {
+    lastUserPrompt = await readLastUserPrompt(input.transcript_path);
+  }
+
+  const body = buildCheckBody(input, config, lastUserPrompt);
 
   try {
     const controller = new AbortController();
@@ -386,6 +454,8 @@ module.exports = {
   loadRuntimeConfig,
   resolveConfig,
   truncateJsonValue,
+  extractLastUserPrompt,
+  readLastUserPrompt,
   buildCheckBody,
   appendAuditRecord,
   interpretDecision,
