@@ -27,9 +27,17 @@ curl -fsSL https://raw.githubusercontent.com/denied-dev/denied-sdk/main/extensio
 
 The installer uses Hermes' Python virtual environment and `pip`;
 
-Restart Hermes or start a new Hermes session after enabling the plugin.
+Restart Hermes after enabling the plugin so the hook is loaded:
+
+```bash
+# CLI / background gateway
+hermes gateway restart        # add --all to restart every profile's gateway
+
+# Desktop app: fully quit and reopen it (a new session is not enough)
+```
+
 For non-default Hermes profiles, export `HERMES_HOME` before running the install
-commands and before starting Hermes.
+commands and before restarting Hermes.
 
 Verify that Hermes sees the plugin:
 
@@ -59,6 +67,45 @@ If the container cannot download from the network, copy a local clone into it:
 git clone https://github.com/denied-dev/denied-sdk.git
 docker cp denied-sdk hermes:/tmp/denied-sdk
 docker exec hermes bash /tmp/denied-sdk/extensions/hermes/install.sh
+```
+
+## Uninstall
+
+Remove the plugin and every artifact the installer created with the bundled
+uninstaller:
+
+```bash
+extensions/hermes/uninstall.sh
+```
+
+It reverses the install:
+
+- uninstalls the `denied-hermes-plugin` package from Hermes' Python environment,
+- removes the `$HERMES_HOME/plugins/denied` directory,
+- drops `denied` from `plugins.enabled` / `plugins.disabled` in `config.yaml`,
+- deletes `$HERMES_HOME/denied.json` (and backups) and the `denied-audit`
+  directory,
+- clears the legacy shell-hooks allowlist entry.
+
+Options:
+
+| Flag | Effect |
+| --- | --- |
+| `--hermes-home PATH` | Target a non-default Hermes profile (or export `HERMES_HOME`). |
+| `--purge-sdk` | Also uninstall the `denied-sdk` package (kept by default, since other code may import it). |
+| `--keep-config` | Keep `denied.json` (and backups) and the `denied-audit` directory. |
+
+> **Security note:** `denied.json` contains your Denied API key. The uninstaller
+> deletes it by default — if the key was real, rotate it at
+> <https://app.denied.dev>.
+
+Restart Hermes afterwards so the hook is dropped:
+
+```bash
+# CLI / background gateway
+hermes gateway restart        # add --all to restart every profile's gateway
+
+# Desktop app: fully quit and reopen it (a new session is not enough)
 ```
 
 ## Configure

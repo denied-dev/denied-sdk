@@ -186,12 +186,50 @@ run_install() {
   log "Installing plugin runtime package into Hermes Python"
   "$hermes_python" -m pip install "$repo_root/extensions/hermes"
 
+  # The plugin is installed via BOTH mechanisms on purpose — they serve
+  # different Hermes subsystems and are not redundant:
+  #   * pip entry point  -> the runtime loader discovers + loads it (it scans
+  #                         entry points and, on key collision, the entry point
+  #                         wins, so it must resolve correctly — see below).
+  #   * ~/.hermes/plugins -> the management CLI (`hermes plugins enable/
+  #                         disable/list`) scans ONLY bundled + user
+  #                         directories, never entry points, so the directory
+  #                         copy is what makes the plugin CLI-manageable.
+  # Drop either one and you lose runtime loading or CLI management respectively.
   log "Copying plugin files to $plugin_dir"
   mkdir -p "$(dirname "$plugin_dir")"
   copy_plugin_files "$repo_root" "$plugin_dir"
 
-  log "Verifying plugin import"
-  PYTHONPATH="$plugin_dir/src" "$hermes_python" -c "from denied_hermes.plugin import DeniedHermesPlugin; plugin = DeniedHermesPlugin(); plugin.close()"
+  # Verify the plugin the way Hermes' runtime loader actually resolves it: load
+  # the entry point and confirm it yields a module exposing register(). A direct
+  # ``import`` would pass even when the entry point is broken, giving false
+  # confidence — the exact failure mode this plugin shipped with.
+  #
+  # Then smoke-test the constructor: it lazily imports denied-sdk and builds the
+  # DeniedClient, so this is what catches denied-sdk installed into the wrong
+  # venv or a broken constructor — failures the entry-point check alone misses.
+  #
+  # Uses ``if``/``sys.exit`` rather than ``assert`` on purpose: asserts are
+  # stripped under ``python -O`` / ``PYTHONOPTIMIZE=1`` (some Docker images, CI
+  # hardening), which would let a broken install pass silently.
+  log "Verifying plugin entry point resolves and constructs"
+  "$hermes_python" - <<'PY'
+import importlib.metadata as m
+import sys
+
+eps = [e for e in m.entry_points().select(group="hermes_agent.plugins") if e.name == "denied"]
+if not eps:
+    sys.exit("denied entry point not found in group 'hermes_agent.plugins' after install")
+module = eps[0].load()
+register = getattr(module, "register", None)
+if not callable(register):
+    sys.exit(
+        f"entry point '{eps[0].value}' did not resolve to a module exposing "
+        f"register(); Hermes would skip the plugin (got {register!r})"
+    )
+# Construct the plugin (imports denied-sdk, builds the client) then tear it down.
+module.DeniedHermesPlugin().close()
+PY
 
   if command -v hermes >/dev/null 2>&1; then
     log "Enabling Hermes plugin"
@@ -201,7 +239,9 @@ run_install() {
     printf '  HERMES_HOME=%q hermes plugins enable %q\n' "$hermes_home" "$PLUGIN_NAME"
   fi
 
-  log "Installed. Restart Hermes or start a new Hermes session."
+  log "Installed. Restart Hermes so the hook is loaded:"
+  log "  CLI / gateway: hermes gateway restart   (add --all for every profile)"
+  log "  Desktop app:   fully quit and reopen it (a new session is not enough)"
 }
 
 run_install "$@"
