@@ -226,7 +226,9 @@ PY
     printf '  HERMES_HOME=%q hermes plugins enable %q\n' "$hermes_home" "$PLUGIN_NAME"
   fi
 
-  log "Installed. Restart Hermes or start a new Hermes session."
+  log "Installed. Restart Hermes so the hook is loaded:"
+  log "  CLI / gateway: hermes gateway restart   (add --all for every profile)"
+  log "  Desktop app:   fully quit and reopen it (a new session is not enough)"
 }
 
 run_install "$@"

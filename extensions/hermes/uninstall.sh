@@ -244,7 +244,9 @@ run_uninstall() {
     fi
   fi
 
-  log "Uninstalled. Fully restart Hermes (the whole process) to drop the hook."
+  log "Uninstalled. Restart Hermes so the hook is dropped:"
+  log "  CLI / gateway: hermes gateway restart   (add --all for every profile)"
+  log "  Desktop app:   fully quit and reopen it (a new session is not enough)"
 }
 
 run_uninstall "$@"
