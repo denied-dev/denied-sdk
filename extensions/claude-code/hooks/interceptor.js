@@ -2,6 +2,7 @@
 // Zero dependencies. Requires Node.js 18+ (native fetch).
 
 const fs = require("node:fs").promises;
+const { createReadStream } = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
@@ -10,6 +11,7 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_FAIL_MODE = "open"; // "open" | "closed"
 const DEFAULT_CONTEXT_MAX_BYTES = 20_000;
 const DEFAULT_TAIL_BYTES = 65_536; // 64 KB tail window for the transcript read
+const DEFAULT_READ_TIMEOUT_MS = 1_000; // independent deadline for the transcript read
 
 function resolveConfigPath(env, homedir) {
   if (env.DENIED_CONFIG) {
@@ -149,6 +151,19 @@ function truncateUtf8(value, maxBytes) {
   return buffer.subarray(0, end).toString("utf-8");
 }
 
+// Truncates a prompt while keeping the field a plain string (unlike
+// truncateJsonValue, which returns an object for oversized values). An inline
+// marker signals truncation so the value stays self-describing.
+function truncatePromptString(value, maxBytes) {
+  const bytes = Buffer.byteLength(value, "utf-8");
+  if (bytes <= maxBytes) {
+    return value;
+  }
+  const marker = ` … [truncated ${bytes} bytes]`;
+  const budget = Math.max(0, maxBytes - Buffer.byteLength(marker, "utf-8"));
+  return truncateUtf8(value, budget) + marker;
+}
+
 // Scans a transcript tail (newest content last) for the most recent
 // Claude Code `last-prompt` entry and returns its plain-string prompt.
 // Pure: no I/O. Returns null when no usable marker is found.
@@ -199,7 +214,7 @@ function buildCheckBody(input, config = DEFAULT_CONFIG, lastUserPrompt = null) {
     context.hook_payload = truncateJsonValue(input, config.maxContextBytes);
   }
   if (config.includeLastUserPrompt && typeof lastUserPrompt === "string" && lastUserPrompt) {
-    context.last_user_prompt = truncateJsonValue(
+    context.last_user_prompt = truncatePromptString(
       lastUserPrompt,
       config.maxContextBytes,
     );
@@ -333,25 +348,39 @@ async function appendAuditRecord(input, body, decision, config = DEFAULT_CONFIG)
 // most recent user prompt, or null. Best-effort: any missing file, read error,
 // or absent marker resolves to null so the authorization decision is never
 // delayed or failed.
-async function readLastUserPrompt(transcriptPath, maxTailBytes = DEFAULT_TAIL_BYTES) {
+async function readLastUserPrompt(
+  transcriptPath,
+  maxTailBytes = DEFAULT_TAIL_BYTES,
+  readTimeoutMs = DEFAULT_READ_TIMEOUT_MS,
+) {
   if (!transcriptPath) {
     return null;
   }
-  let handle;
+  // The read has its own independent deadline (separate from the PDP fetch
+  // timeout). The signal is passed to the stream so a stalled device aborts
+  // the in-flight read rather than blocking the authorization decision.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), readTimeoutMs);
   try {
-    handle = await fs.open(transcriptPath, "r");
-    const { size } = await handle.stat();
-    const length = Math.min(size, maxTailBytes);
-    const position = Math.max(0, size - maxTailBytes);
-    const buffer = Buffer.alloc(length);
-    await handle.read(buffer, 0, length, position);
-    return extractLastUserPrompt(buffer.toString("utf-8"));
+    const { size } = await fs.stat(transcriptPath);
+    if (size === 0) {
+      return null;
+    }
+    const start = Math.max(0, size - maxTailBytes);
+    const stream = createReadStream(transcriptPath, {
+      start,
+      end: size - 1,
+      signal: controller.signal,
+    });
+    const chunks = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+    }
+    return extractLastUserPrompt(Buffer.concat(chunks).toString("utf-8"));
   } catch {
     return null;
   } finally {
-    if (handle) {
-      await handle.close().catch(() => { });
-    }
+    clearTimeout(timer);
   }
 }
 

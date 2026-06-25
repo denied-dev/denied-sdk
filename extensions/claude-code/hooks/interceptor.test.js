@@ -198,13 +198,14 @@ test("buildCheckBody omits last_user_prompt when none was extracted", () => {
   assert.equal("last_user_prompt" in body.context, false);
 });
 
-test("buildCheckBody truncates an oversized last_user_prompt", () => {
+test("buildCheckBody truncates an oversized last_user_prompt but keeps it a string", () => {
   const body = buildCheckBody(
     { tool_name: "Bash" },
-    { ...DEFAULT_TEST_CONFIG, maxContextBytes: 20 },
+    { ...DEFAULT_TEST_CONFIG, maxContextBytes: 200 },
     "x".repeat(500),
   );
-  assert.equal(body.context.last_user_prompt.truncated, true);
+  assert.equal(typeof body.context.last_user_prompt, "string");
+  assert.match(body.context.last_user_prompt, /\[truncated 500 bytes\]$/);
 });
 
 test("extractLastUserPrompt returns the prompt from a last-prompt line", () => {
@@ -258,6 +259,17 @@ test("readLastUserPrompt reads the prompt from a transcript file", async () => {
       ].join("\n"),
     );
     assert.equal(await readLastUserPrompt(file), "the question");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("readLastUserPrompt returns null for an empty transcript file", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "denied-claude-tx-"));
+  const file = path.join(dir, "empty.jsonl");
+  try {
+    await fs.writeFile(file, "");
+    assert.equal(await readLastUserPrompt(file), null);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
