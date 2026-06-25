@@ -14,12 +14,17 @@ const {
   loadRuntimeConfig,
   resolveConfig,
   truncateJsonValue,
+  extractLastUserPrompt,
+  readLastUserPrompt,
   buildCheckBody,
   appendAuditRecord,
   interpretDecision,
   resolveFailSafe,
   buildDecisionOutput,
 } = require("./interceptor.js");
+
+// Default resolved config used by buildCheckBody tests that need explicit flags.
+const DEFAULT_TEST_CONFIG = resolveConfig({}, {});
 
 test("resolveConfigPath defaults to ~/.denied/config.json", () => {
   assert.equal(
@@ -53,6 +58,7 @@ test("resolveConfig falls back to defaults with no env or file", () => {
     timeoutMs: 15000,
     includeToolInput: true,
     includeHookPayload: true,
+    includeLastUserPrompt: true,
     maxContextBytes: 20000,
     audit: {
       enabled: false,
@@ -82,6 +88,14 @@ test("resolveConfig lets environment variables override the file", () => {
 
 test("resolveConfig ignores a non-string file failMode", () => {
   assert.equal(resolveConfig({}, { failMode: 42 }).failMode, "open");
+});
+
+test("resolveConfig honors request.includeLastUserPrompt: false", () => {
+  assert.equal(
+    resolveConfig({}, { request: { includeLastUserPrompt: false } })
+      .includeLastUserPrompt,
+    false,
+  );
 });
 
 test("loadRuntimeConfig resolves config from the async file loader", async () => {
@@ -163,6 +177,130 @@ test("buildCheckBody honors request context flags", () => {
 
   assert.deepEqual(body.resource.properties, { tool_use_id: "use-1" });
   assert.equal("hook_payload" in body.context, false);
+});
+
+test("buildCheckBody adds last_user_prompt to context by default", () => {
+  const body = buildCheckBody({ tool_name: "Bash" }, DEFAULT_TEST_CONFIG, "build the thing");
+  assert.equal(body.context.last_user_prompt, "build the thing");
+});
+
+test("buildCheckBody omits last_user_prompt when the flag is off", () => {
+  const body = buildCheckBody(
+    { tool_name: "Bash" },
+    { ...DEFAULT_TEST_CONFIG, includeLastUserPrompt: false },
+    "build the thing",
+  );
+  assert.equal("last_user_prompt" in body.context, false);
+});
+
+test("buildCheckBody omits last_user_prompt when none was extracted", () => {
+  const body = buildCheckBody({ tool_name: "Bash" }, DEFAULT_TEST_CONFIG, null);
+  assert.equal("last_user_prompt" in body.context, false);
+});
+
+test("buildCheckBody truncates an oversized last_user_prompt but keeps it a string", () => {
+  const body = buildCheckBody(
+    { tool_name: "Bash" },
+    { ...DEFAULT_TEST_CONFIG, maxContextBytes: 200 },
+    "x".repeat(500),
+  );
+  assert.equal(typeof body.context.last_user_prompt, "string");
+  assert.match(body.context.last_user_prompt, /\[truncated 500 bytes\]$/);
+});
+
+test("extractLastUserPrompt returns the prompt from a last-prompt line", () => {
+  const text = [
+    JSON.stringify({ type: "user", message: "hi" }),
+    JSON.stringify({ type: "last-prompt", lastPrompt: "do the work", leafUuid: "a" }),
+  ].join("\n");
+  assert.equal(extractLastUserPrompt(text), "do the work");
+});
+
+test("extractLastUserPrompt returns the most recent marker", () => {
+  const text = [
+    JSON.stringify({ type: "last-prompt", lastPrompt: "first" }),
+    JSON.stringify({ type: "assistant", message: "ok" }),
+    JSON.stringify({ type: "last-prompt", lastPrompt: "second" }),
+  ].join("\n");
+  assert.equal(extractLastUserPrompt(text), "second");
+});
+
+test("extractLastUserPrompt skips a leading partial line", () => {
+  const text = [
+    '{"type":"last-prompt","lastPrompt":"truncated par', // partial first line
+    JSON.stringify({ type: "last-prompt", lastPrompt: "complete" }),
+  ].join("\n");
+  assert.equal(extractLastUserPrompt(text), "complete");
+});
+
+test("extractLastUserPrompt returns null when no marker is present", () => {
+  const text = [
+    JSON.stringify({ type: "user", message: "hi" }),
+    JSON.stringify({ type: "assistant", message: "ok" }),
+  ].join("\n");
+  assert.equal(extractLastUserPrompt(text), null);
+});
+
+test("extractLastUserPrompt ignores a non-string lastPrompt", () => {
+  const text = JSON.stringify({ type: "last-prompt", lastPrompt: { not: "a string" } });
+  assert.equal(extractLastUserPrompt(text), null);
+});
+
+test("readLastUserPrompt reads the prompt from a transcript file", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "denied-claude-tx-"));
+  const file = path.join(dir, "session.jsonl");
+  try {
+    await fs.writeFile(
+      file,
+      [
+        JSON.stringify({ type: "user", message: "hi" }),
+        JSON.stringify({ type: "last-prompt", lastPrompt: "the question" }),
+        "",
+      ].join("\n"),
+    );
+    assert.equal(await readLastUserPrompt(file), "the question");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("readLastUserPrompt returns null for an empty transcript file", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "denied-claude-tx-"));
+  const file = path.join(dir, "empty.jsonl");
+  try {
+    await fs.writeFile(file, "");
+    assert.equal(await readLastUserPrompt(file), null);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("readLastUserPrompt returns null for missing and falsy paths", async () => {
+  assert.equal(await readLastUserPrompt(""), null);
+  assert.equal(await readLastUserPrompt(undefined), null);
+  assert.equal(
+    await readLastUserPrompt(path.join(os.tmpdir(), `no-such-${Date.now()}.jsonl`)),
+    null,
+  );
+});
+
+test("readLastUserPrompt reads only the bounded tail", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "denied-claude-tx-"));
+  const file = path.join(dir, "session.jsonl");
+  try {
+    const filler = JSON.stringify({ type: "assistant", message: "x".repeat(200) });
+    const lines = [];
+    for (let i = 0; i < 50; i += 1) {
+      lines.push(filler);
+    }
+    lines.push(JSON.stringify({ type: "last-prompt", lastPrompt: "near the end" }));
+    lines.push("");
+    await fs.writeFile(file, lines.join("\n"));
+    // Tail window smaller than the whole file but large enough for the last marker.
+    assert.equal(await readLastUserPrompt(file, 512), "near the end");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("truncateJsonValue returns a Hermes-style preview for oversized values", () => {

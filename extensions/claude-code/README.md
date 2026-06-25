@@ -79,6 +79,7 @@ Example `~/.denied/config.json`:
   "request": {
     "includeToolInput": true,
     "includeHookPayload": true,
+    "includeLastUserPrompt": true,
     "maxContextBytes": 20000
   },
   "audit": {
@@ -91,9 +92,9 @@ Example `~/.denied/config.json`:
 }
 ```
 
-`request.includeToolInput` controls whether raw tool input is sent as bounded request context. `request.maxContextBytes` replaces oversized JSON values with a `{ "truncated": true, ... }` preview. When `audit.enabled` is true, local JSONL debug records are written to `~/.denied/audit/denied-claude-code-hook.jsonl` by default.
+`request.includeToolInput` controls whether raw tool input is sent as bounded request context. `request.includeLastUserPrompt` (default `true`) controls whether the user's most recent prompt is read from the session transcript and added to the check `context` as `last_user_prompt`; it is extracted via a bounded tail read of `transcript_path` and is best-effort (a missing transcript, parse failure, or marker miss simply omits the field — it never delays or fails the authorization decision). The read has its own short independent deadline (~1s), so a stalled filesystem aborts the read rather than blocking the decision. `request.maxContextBytes` replaces oversized JSON values (e.g. `tool_input`, `hook_payload`) with a `{ "truncated": true, ... }` preview; `last_user_prompt` is always kept as a `string` and, when over the cap, is truncated with an inline ` … [truncated N bytes]` marker so the field type stays stable for policy matching. When `audit.enabled` is true, local JSONL debug records are written to `~/.denied/audit/denied-claude-code-hook.jsonl` by default.
 
-> **Security note:** Audit logs may contain sensitive data. When `audit.enabled` is true, `audit.includeRawPayload`, `audit.includeMappedRequest`, `request.includeToolInput`, and `request.includeHookPayload` default to `true`, so audit records can include full tool inputs, hook payloads, file contents, shell commands, URLs, and credentials. Store audit logs only in a location with appropriate access controls.
+> **Security note:** Audit logs may contain sensitive data. When `audit.enabled` is true, `audit.includeRawPayload`, `audit.includeMappedRequest`, `request.includeToolInput`, `request.includeHookPayload`, and `request.includeLastUserPrompt` default to `true`, so requests and audit records can include full tool inputs, hook payloads, the user's last prompt, file contents, shell commands, URLs, and credentials. Store audit logs only in a location with appropriate access controls.
 
 ## Default behavior
 
@@ -124,6 +125,7 @@ For each tool call, the plugin sends an authorization check to the Denied server
 - **Subject**: `claude-code://<sessionId>` with `cwd` and `permission_mode` as properties
 - **Action**: `execute`
 - **Resource**: `tool://<toolName>` with `tool_use_id` and, by default, bounded `tool_input` as properties
+- **Context**: the integration name, the hook event, and — by default — the bounded hook payload and the user's most recent prompt (`last_user_prompt`)
 
 The Denied server evaluates the request against your policies and returns allow or deny. If denied, the block reason is fed back to the agent so it can adapt its behavior.
 
