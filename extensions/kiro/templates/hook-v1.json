@@ -1,0 +1,17 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "denied-authz",
+      "description": "Denied authorization gate — blocks tool calls that policy denies",
+      "trigger": "PreToolUse",
+      "matcher": ".*",
+      "action": {
+        "type": "command",
+        "command": "node \"__DENIED_INTERCEPTOR_PATH__\""
+      },
+      "timeout": 20,
+      "enabled": true
+    }
+  ]
+}
