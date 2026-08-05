@@ -280,9 +280,21 @@ function resolveConfig(env, fileConfig, warn = () => {}, homedir = os.homedir())
     ? redactionConfig.keys.filter((key) => typeof key === "string" && key)
     : [];
 
+  // A whitespace-only env var is truthy, so it would override a valid config
+  // value and then fail every fetch — a silent fail-open under the default
+  // failMode. The usual cause is a template that rendered an env var empty.
+  const envOverride = (name) => {
+    const value = env[name];
+    if (typeof value === "string" && value !== "" && value.trim() === "") {
+      warn(`Ignoring blank ${name}; falling back to the config file value.`);
+      return "";
+    }
+    return value;
+  };
+
   return {
-    url: env.DENIED_URL || source.url || DEFAULT_URL,
-    apiKey: env.DENIED_API_KEY || source.apiKey || "",
+    url: envOverride("DENIED_URL") || source.url || DEFAULT_URL,
+    apiKey: envOverride("DENIED_API_KEY") || source.apiKey || "",
     failMode,
     timeoutMs,
     surface: typeof source.surface === "string" && source.surface

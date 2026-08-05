@@ -8,6 +8,9 @@
 //          Antigravity's handling of a broken hook is version-unstable (deny on
 //          agy <= 1.1.7, silent allow on 1.1.10), so every one of these
 //          scenarios must still end in exit 0 plus exactly one JSON decision.
+//   §8.3 — regression guards for the two adversarial review rounds (R1–R13).
+//          Every finding below shipped past §8.1/§8.2, so each test is named
+//          for the finding it pins rather than for the function it calls.
 //
 // Run with: node --test (Node 18+, zero dependencies).
 
@@ -19,17 +22,25 @@ const { mkdtempSync, rmSync } = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { spawn, execFileSync } = require("node:child_process");
 const { Readable, PassThrough } = require("node:stream");
 
 const {
   WATCHDOG_MS,
   MAX_TIMEOUT_MS,
   DEFAULT_TIMEOUT_MS,
+  BUDGET_SLACK_MS,
   DEFAULT_STDIN_TIMEOUT_MS,
+  DEFAULT_CONFIG_TIMEOUT_MS,
   DEFAULT_READ_TIMEOUT_MS,
+  DEFAULT_AUDIT_TIMEOUT_MS,
   DEFAULT_TAIL_BYTES,
   DEFAULT_REDACT_KEYS,
+  MAX_REDACT_STRING_BYTES,
+  MAX_REASON_BYTES,
+  MAX_RESPONSE_BYTES,
+  MAX_STDIN_BYTES,
+  MAX_TOOL_NAME_BYTES,
   FAIL_MODES,
   resolveConfigPath,
   loadFileConfig,
@@ -50,6 +61,7 @@ const {
   deriveSurface,
   caseInsensitiveGet,
   parseHookPayload,
+  repairTruncatedJson,
   normalizeToolCall,
   workspacePathList,
   buildCheckBody,
@@ -123,6 +135,9 @@ function runInterceptor({
   keepStdinOpen = false,
   preload,
   args = [],
+  // Called with the spawned child before stdin is written, so a test can signal
+  // it (§8.3 R3) without racing the promise this returns.
+  onChild,
 } = {}) {
   return new Promise((resolve, reject) => {
     const argv = [];
@@ -150,6 +165,10 @@ function runInterceptor({
     child.on("close", (code, signal) => {
       resolve({ code, signal, stdout, stderr, durationMs: Date.now() - started });
     });
+
+    if (typeof onChild === "function") {
+      onChild(child);
+    }
 
     if (keepStdinOpen) {
       if (stdin) {
@@ -2140,5 +2159,1512 @@ test("the interceptor reads its settings from the config file when env is empty"
       assert.equal(body.subject.properties.surface, "app");
       assert.equal("hook_payload" in body.context, false);
     },
+  );
+});
+
+// ===========================================================================
+// §8.3 — Regression guards for the adversarial review rounds
+//
+// Everything below shipped past the suite above. Each test is named for the
+// finding it pins (R1–R13) so a red run in CI identifies the regression rather
+// than the helper that noticed it.
+// ===========================================================================
+
+// --- Linearity harness (R1, R8) --------------------------------------------
+//
+// Every pattern that runs on model-controlled text has to cost linear time in
+// the length of that text: the work is synchronous, so neither the watchdog
+// timer nor a signal handler can preempt it, and the host's own timeout decides
+// the tool call instead of us. Three of these shipped (the authorization
+// whitespace pair, `echo(?!\s.*>)`, `add_.*_member`), so the guard is a *dual*
+// bound, because either half alone is defeatable:
+//
+//   1. an absolute floor — catches a regression that keeps a byte-cap shield
+//      (MAX_REDACT_STRING_BYTES, MAX_TOOL_NAME_BYTES) but reverts the pattern,
+//      where the input never grows large enough for a ratio to blow up;
+//   2. a ratio against a *same-length* benign control that matches nothing —
+//      machine-independent, which is what keeps this stable on a shared CI
+//      runner. Healthy ratios measured on this repo's inputs are 0.6–8.2;
+//      the pre-fix patterns score 324–16,289 (see the R1/R8 probes below).
+//
+// Every control is the hostile input with a single character changed, so the
+// two differ in what they match and in nothing else.
+// The transcript marker, spelled out here rather than imported: interceptor.js
+// keeps it private, and a test that reproduces it independently also pins it.
+const USER_REQUEST_OPEN_MARKER = "<USER_REQUEST>\n";
+
+const LINEAR_ITERATIONS = 20;
+const LINEAR_TRIALS = 3;
+const LINEAR_BUDGET_MS = 400; // healthy ≈2ms here; 20× headroom for a slow runner
+const LINEAR_MAX_RATIO = 40;
+// Floors the divisor so a control too cheap to measure cannot manufacture a
+// huge ratio out of timer granularity.
+const MIN_CONTROL_MS = 0.05;
+
+function timeCall(fn, input, iterations) {
+  const started = process.hrtime.bigint();
+  for (let i = 0; i < iterations; i += 1) {
+    fn(input);
+  }
+  return Number(process.hrtime.bigint() - started) / 1e6;
+}
+
+// Best of N: a GC pause or a noisy neighbour can only make a run look slower,
+// never faster, so the minimum is the least flaky statistic available here.
+function bestOf(fn, input, iterations, trials) {
+  let best = Infinity;
+  for (let trial = 0; trial < trials; trial += 1) {
+    best = Math.min(best, timeCall(fn, input, iterations));
+  }
+  return best;
+}
+
+function assertLinearCost(fn, hostile, control, label, options = {}) {
+  const {
+    iterations = LINEAR_ITERATIONS,
+    trials = LINEAR_TRIALS,
+    budgetMs = LINEAR_BUDGET_MS,
+    maxRatio = LINEAR_MAX_RATIO,
+  } = options;
+  assert.equal(
+    hostile.length,
+    control.length,
+    `${label}: the benign control must be the same length as the hostile input`,
+  );
+  timeCall(fn, control, 1); // warm the JIT on the cheap input only
+  const controlMs = Math.max(bestOf(fn, control, iterations, trials), MIN_CONTROL_MS);
+  const hostileMs = bestOf(fn, hostile, iterations, trials);
+  const detail = `(${iterations}× ${hostile.length} chars: hostile ${hostileMs.toFixed(2)}ms, benign control ${controlMs.toFixed(2)}ms)`;
+  assert.ok(
+    hostileMs < budgetMs,
+    `${label}: took ${hostileMs.toFixed(1)}ms, over the ${budgetMs}ms floor ${detail}`,
+  );
+  const ratio = hostileMs / controlMs;
+  assert.ok(
+    ratio < maxRatio,
+    `${label}: cost ${ratio.toFixed(1)}× a same-length benign control, over the ${maxRatio}× bound ${detail}`,
+  );
+  return ratio;
+}
+
+// The pre-fix patterns, copied verbatim from the commit messages that removed
+// them (ac0f356, 7f95753). interceptor.js is never modified; these exist only
+// to prove the bound above is load-bearing rather than decorative — a guard
+// that cannot be shown to fail against the original bug is not a guard.
+const PRE_FIX_AUTHORIZATION = /(\bauthorization:\s*(?:bearer|basic)?\s+)([^\s"';&|]+)/gi;
+const preFixRedactStringSecrets = (value) =>
+  // Keeps the byte-cap shield and reverts only the pattern: the exact partial
+  // regression the absolute floor exists for.
+  value.slice(0, MAX_REDACT_STRING_BYTES).replace(PRE_FIX_AUTHORIZATION, "$1[REDACTED]");
+
+const PRE_FIX_SHELL_READ =
+  /\b(cat|head|tail|less|more|grep|find|ls|pwd|whoami|echo(?!\s.*>)|file|stat|wc|diff|which|type|env|printenv|date|uname)\b/i;
+const preFixInferShellEffect = (command) =>
+  PRE_FIX_SHELL_READ.test(command) ? "read" : "execute";
+
+const PRE_FIX_MEMBER = /(^|_)(share|add_.*_member)(_|$)/i;
+const preFixInferEffect = (name) => (PRE_FIX_MEMBER.test(name) ? "update" : "execute");
+
+const PRE_FIX_USER_REQUEST = /<USER_REQUEST>\n([\s\S]*?)\n<\/USER_REQUEST>/;
+const preFixExtractLastUserPrompt = (text) => {
+  const match = PRE_FIX_USER_REQUEST.exec(text);
+  return match ? match[1] : null;
+};
+
+// --- Subprocess helpers (R3, R5, R11, R12) ---------------------------------
+
+async function waitUntil(predicate, timeoutMs = 10_000, intervalMs = 25) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return predicate();
+}
+
+// FIFOs are how a *blocked* filesystem is simulated: an open(2) that never
+// returns wedges a libuv threadpool thread, which is the exact hazard the
+// config deadline (R5) and the audit deadline (R11) exist for. Every one of
+// these runs in a child process — an in-process read of a FIFO cannot be
+// reached by an AbortSignal, and `node --test` would never exit.
+function makeFifoAt(file) {
+  try {
+    execFileSync("mkfifo", [file], { stdio: "ignore" });
+    return file;
+  } catch {
+    return null; // no mkfifo (Windows, restricted image): the caller skips
+  }
+}
+
+const makeFifo = (name) => makeFifoAt(tmpPath(name));
+
+// Reads stdout while the child is still alive, then kills it. A process with a
+// wedged threadpool thread cannot be joined — interceptor.js documents that
+// neither process.exit(0) nor the watchdog can end it — so awaiting a normal
+// exit would hang the suite. What survives that is whatever already reached
+// stdout, which is the whole point of emitting the decision first.
+function runUntilDecision({
+  env = {},
+  stdin = "",
+  keepStdinOpen = false,
+  until,
+  timeoutMs = 12_000,
+} = {}) {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const child = spawn(process.execPath, [INTERCEPTOR], {
+      env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let decisionMs = null;
+    let exited = false;
+    let settled = false;
+
+    const state = () => ({ stdout, stderr, decisionMs, exited, elapsedMs: Date.now() - started });
+    const ready = () => {
+      if (decisionMs === null) {
+        return false;
+      }
+      return typeof until === "function" ? until(state()) : true;
+    };
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (exited) {
+        resolve(state());
+        return;
+      }
+      child.once("close", () => resolve(state()));
+      child.kill("SIGKILL");
+    };
+    const timer = setTimeout(finish, timeoutMs);
+
+    child.stdout.setEncoding("utf-8");
+    child.stderr.setEncoding("utf-8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      if (decisionMs === null && safeJson(stdout)) {
+        decisionMs = Date.now() - started;
+      }
+      if (ready()) {
+        finish();
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+      if (ready()) {
+        finish();
+      }
+    });
+    child.stdin.on("error", () => {});
+    child.on("error", () => finish());
+    child.on("close", () => {
+      exited = true;
+      finish();
+    });
+
+    if (keepStdinOpen) {
+      if (stdin) {
+        child.stdin.write(stdin);
+      }
+    } else {
+      child.stdin.end(stdin);
+    }
+  });
+}
+
+function runNodeEval(source, env = childEnv()) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["-e", source], {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf-8");
+    child.stderr.setEncoding("utf-8");
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("error", reject);
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// R1 — ReDoS in redactStringSecrets
+// ---------------------------------------------------------------------------
+
+// `\s*(?:bearer|basic)?\s+` let two adjacent quantifiers match the same
+// character: the two whitespace runs share every split point, so a long run of
+// spaces that never completes the match backtracks quadratically. Measured on
+// the unfixed build: 8.7ms at 4 KB, 43ms at 8 KB, 96ms at 16 KB, 517ms at 32 KB.
+const REDACT_REDOS_SHAPES = [
+  [
+    "whitespace run after authorization:",
+    (n) => `authorization:${" ".repeat(n)}`,
+    (n) => `authorizationz${" ".repeat(n)}`,
+  ],
+  [
+    "whitespace run terminated by an excluded character",
+    (n) => `authorization:${" ".repeat(n)}"`,
+    (n) => `authorizationz${" ".repeat(n)}"`,
+  ],
+  [
+    "repeated authorization: blocks",
+    (n) => "authorization: ".repeat(Math.floor(n / 15)),
+    (n) => "authorizationz ".repeat(Math.floor(n / 15)),
+  ],
+  [
+    "--token run",
+    (n) => `--token ${" ".repeat(n)}`,
+    (n) => `--tokenz${" ".repeat(n)}`,
+  ],
+  [
+    "tab run after authorization:",
+    (n) => `authorization:${"\t".repeat(n)}`,
+    (n) => `authorizationz${"\t".repeat(n)}`,
+  ],
+];
+
+test("R1: redactStringSecrets stays linear on every ReDoS-shaped secret string", () => {
+  for (const [shape, hostile, control] of REDACT_REDOS_SHAPES) {
+    // 8 KB is under MAX_REDACT_STRING_BYTES and 32/128 KB are over it, so the
+    // pattern is measured both unshielded and behind the byte cap.
+    for (const size of [8_192, 32_768, 131_072]) {
+      assertLinearCost(
+        redactStringSecrets,
+        hostile(size),
+        control(size),
+        `R1 redactStringSecrets, ${shape} at ${size}B`,
+      );
+    }
+  }
+});
+
+test("R1: redactStringSecrets still redacts the shapes the ReDoS inputs are built from", () => {
+  // Linearity is worthless if it was bought by no longer matching.
+  assert.equal(
+    redactStringSecrets('curl -H "authorization: bearer abc123" https://x'),
+    'curl -H "authorization: bearer [REDACTED]" https://x',
+  );
+  assert.equal(redactStringSecrets("authorization: abc123"), "authorization: [REDACTED]");
+  assert.equal(redactStringSecrets("authorization:\tabc123"), "authorization:\t[REDACTED]");
+  assert.equal(redactStringSecrets("deploy --token sk_1"), "deploy --token [REDACTED]");
+  assert.equal(redactStringSecrets("TOKEN=sk_1 run"), "TOKEN=[REDACTED] run");
+});
+
+test("R1: the pre-fix authorization pattern would have failed the linearity bound", () => {
+  // The probe that makes the guard meaningful. Budget disabled so only the
+  // machine-independent ratio can fire — the half that has to hold on a shared
+  // CI runner. (At the suite's 20 iterations the 400ms floor fires too: the
+  // pre-fix pattern costs ~110ms per call at 16 KB even with the byte cap kept.)
+  const size = MAX_REDACT_STRING_BYTES;
+  assert.throws(
+    () =>
+      assertLinearCost(
+        preFixRedactStringSecrets,
+        `authorization:${" ".repeat(size)}`,
+        `authorizationz${" ".repeat(size)}`,
+        "R1 pre-fix probe",
+        { iterations: 1, trials: 1, budgetMs: Infinity },
+      ),
+    /over the 40× bound/,
+    "the pre-fix authorization pattern must fail the bound the fixed one passes",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// R2 — MAX_REDACT_STRING_BYTES: a secret must not escape via truncate-before-scan
+// ---------------------------------------------------------------------------
+
+test("R2: no secret escapes through the MAX_REDACT_STRING_BYTES cut", () => {
+  // Cutting before scanning is the second defence against R1, and it is only
+  // safe if the cut cannot strand a secret on the far side of it. The secret is
+  // swept across the boundary a byte at a time: at every offset it is either
+  // redacted or gone, never passed through.
+  const secret = "SUPERSECRETVALUE1234";
+  const build = (startAt) => `${"f".repeat(startAt - 1)} authorization: ${secret} tail`;
+
+  let redactedCount = 0;
+  let cutCount = 0;
+  for (let offset = -120; offset <= 40; offset += 1) {
+    const input = build(MAX_REDACT_STRING_BYTES + offset);
+    const output = redactStringSecrets(input);
+    assert.equal(
+      output.includes(secret),
+      false,
+      `secret survived at offset ${offset} (${JSON.stringify(output.slice(-70))})`,
+    );
+    // Not even a fragment: a partial secret is still a secret.
+    assert.equal(
+      output.includes(secret.slice(0, 4)),
+      false,
+      `a secret fragment survived at offset ${offset}`,
+    );
+    assert.ok(
+      Buffer.byteLength(output, "utf-8") <= MAX_REDACT_STRING_BYTES,
+      `output exceeded the cap at offset ${offset}`,
+    );
+    if (output.includes("[REDACTED]")) {
+      redactedCount += 1;
+    } else {
+      cutCount += 1;
+    }
+  }
+  // Both sides of the boundary were actually exercised.
+  assert.ok(redactedCount > 10, `only ${redactedCount} offsets redacted in place`);
+  assert.ok(cutCount > 10, `only ${cutCount} offsets were cut away`);
+
+  // And the head that *survives* an oversized string is still scanned: the cut
+  // happens before the scan, never instead of it. (A `write_to_file` body that
+  // opens with a credential is the shape this protects.)
+  const oversized = `authorization: ${secret} ${"f".repeat(MAX_REDACT_STRING_BYTES * 2)}`;
+  const scanned = redactStringSecrets(oversized);
+  assert.ok(Buffer.byteLength(scanned, "utf-8") <= MAX_REDACT_STRING_BYTES);
+  assert.equal(scanned.includes(secret), false, "a secret in the kept head went unscanned");
+  assert.match(scanned, /^authorization: \[REDACTED\] fff/);
+});
+
+test("R2: a multibyte character straddling the cut never corrupts the output", () => {
+  // A naive byte cut here would emit a half character, and the emitted decision
+  // (or the audit record) would stop being valid JSON.
+  for (let pad = 0; pad < 8; pad += 1) {
+    for (const char of ["é", "€", "😀"]) {
+      const input = "a".repeat(pad) + char.repeat(9_000);
+      const output = redactStringSecrets(input);
+      const label = `pad=${pad} char=${char}`;
+      assert.ok(
+        Buffer.byteLength(output, "utf-8") <= MAX_REDACT_STRING_BYTES,
+        `${label}: over the cap`,
+      );
+      assert.equal(output.includes("�"), false, `${label}: replacement character`);
+      // No lone surrogate survives once the well-formed pairs are removed.
+      assert.equal(
+        /[\uD800-\uDFFF]/.test(output.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "")),
+        false,
+        `${label}: lone surrogate`,
+      );
+      assert.equal(JSON.parse(JSON.stringify({ v: output })).v, output, `${label}: JSON round-trip`);
+    }
+  }
+});
+
+test("R2: a secret past the cut is dropped rather than smuggled into the preview", () => {
+  const config = { ...TEST_CONFIG, maxContextBytes: 512 };
+  const value = {
+    CommandLine: `${"echo padding; ".repeat(2_000)} authorization: LEAKED_TOKEN_VALUE`,
+  };
+  const serialized = JSON.stringify(boundedContext(value, config));
+  assert.equal(serialized.includes("LEAKED_TOKEN_VALUE"), false);
+  assert.ok(Buffer.byteLength(serialized, "utf-8") < 2_000);
+});
+
+// ---------------------------------------------------------------------------
+// R3 — Signals
+// ---------------------------------------------------------------------------
+
+const CATCHABLE_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
+
+test("R3: every catchable signal still ends in exit 0 and one decision", { timeout: 60000 }, async () => {
+  // Signal death is a normal way for this process to end — the host kills the
+  // child at its own timeout, Ctrl-C reaches the whole process group, closing
+  // the IDE sends SIGHUP — and an unhandled signal bypasses the exit handler
+  // entirely, leaving empty stdout and the outcome to the host.
+  const combos = [];
+  for (const signal of CATCHABLE_SIGNALS) {
+    for (const failMode of ["open", "closed"]) {
+      combos.push([signal, failMode]);
+    }
+  }
+
+  await withServer(
+    // A PDP that never answers: every child parks in fetch, so the signal
+    // arrives while the decision is still outstanding.
+    () => startStubServer(() => {}),
+    async (server) => {
+      const children = [];
+      const runs = combos.map(([signal, failMode]) =>
+        runInterceptor({
+          stdin: JSON.stringify(capturedPayload()),
+          env: childEnv({
+            DENIED_URL: server.url,
+            DENIED_API_KEY: "dn_test",
+            DENIED_FAIL_MODE: failMode,
+          }),
+          onChild: (child) => children.push({ child, signal, failMode }),
+        }),
+      );
+
+      // Handlers are installed at module load, before main() runs, so a request
+      // on the wire proves the handler is already in place — killing on a timer
+      // instead would race module load on a slow runner.
+      const armed = await waitUntil(() => server.requests.length >= combos.length, 20_000);
+      assert.ok(
+        armed,
+        `only ${server.requests.length}/${combos.length} children reached the PDP before the signal`,
+      );
+
+      for (const { child, signal } of children) {
+        child.kill(signal);
+      }
+
+      const results = await Promise.all(runs);
+      results.forEach((result, index) => {
+        const [signal, failMode] = combos[index];
+        const label = `R3 ${signal} failMode=${failMode}`;
+        const decision = assertDecision(result, label);
+        // Exit 0 with a decision, never death by signal: `signal` is null.
+        assert.equal(result.signal, null, `${label}: died by signal ${result.signal}`);
+        assert.equal(
+          decision.decision,
+          failMode === "closed" ? "deny" : "allow",
+          `${label}: wrong fail-safe direction`,
+        );
+        assert.match(decision.reason, new RegExp(`Received ${signal}`), label);
+        // Exactly one object: assertDecision's JSON.parse rejects a second one,
+        // and the count below rejects a duplicate that happens to concatenate.
+        assert.equal(
+          result.stdout.split('{"decision"').length - 1,
+          1,
+          `${label}: stdout carried more than one decision object`,
+        );
+      });
+    },
+  );
+});
+
+test("R3: requiring the interceptor installs no signal handlers", { timeout: 30000 }, async () => {
+  // Nothing may run on require: the module is imported by this very file, and a
+  // handler installed at import time would also mean the process-level state
+  // below is shared with whatever imported it. Asserted in a *fresh* process —
+  // the test runner installs handlers of its own, so an in-process count
+  // measures the runner rather than the module.
+  const events = [
+    ...CATCHABLE_SIGNALS,
+    "SIGPIPE",
+    "exit",
+    "uncaughtException",
+    "unhandledRejection",
+  ];
+  const source = `
+    const before = ${JSON.stringify(events)}.map((e) => process.listenerCount(e));
+    require(${JSON.stringify(INTERCEPTOR)});
+    const after = ${JSON.stringify(events)}.map((e) => process.listenerCount(e));
+    process.stdout.write(JSON.stringify({ before, after }));
+  `;
+  const result = await runNodeEval(source);
+  assert.equal(result.code, 0, `require() failed: ${result.stderr}`);
+  const { before, after } = JSON.parse(result.stdout);
+  assert.deepEqual(
+    after,
+    before,
+    `requiring interceptor.js changed listener counts for ${events.join("/")}`,
+  );
+  assert.deepEqual(after, events.map(() => 0));
+});
+
+// ---------------------------------------------------------------------------
+// R4 — Reason cap and response cap
+// ---------------------------------------------------------------------------
+
+// A corporate proxy answers a blocked request with a whole HTML page, and an
+// emitted object larger than the OS pipe buffer blocks the write forever on a
+// host that reads stdout only after we exit.
+function bigBodyServer(body, status) {
+  return startStubServer((req, res) => {
+    res.writeHead(status, { "Content-Type": "text/html" });
+    res.end(body);
+  });
+}
+
+test("R4: a 200 KB error body is capped at MAX_REASON_BYTES and still parses", { timeout: 30000 }, async () => {
+  const page = `<html>${"E".repeat(200_000)}</html>`;
+  await withServer(
+    () => bigBodyServer(page, 502),
+    async (server) => {
+      const result = await runInterceptor({
+        stdin: JSON.stringify(capturedPayload()),
+        env: childEnv({
+          DENIED_URL: server.url,
+          DENIED_API_KEY: "dn_test",
+          DENIED_FAIL_MODE: "open",
+        }),
+      });
+
+      const decision = assertDecision(result, "R4 reason cap");
+      assert.equal(decision.decision, "allow");
+      assert.ok(
+        Buffer.byteLength(decision.reason, "utf-8") <= MAX_REASON_BYTES,
+        `reason was ${Buffer.byteLength(decision.reason, "utf-8")} bytes`,
+      );
+      // stdout stays inside a pipe buffer with room to spare.
+      assert.ok(result.stdout.length < MAX_REASON_BYTES + 512, `stdout was ${result.stdout.length} bytes`);
+      // The head — the part that tells the agent why — is preserved.
+      assert.match(decision.reason, /^Denied policy engine unavailable and fail-mode is open\. HTTP 502: <html>EEE/);
+      // And the cut is visible rather than silent.
+      assert.match(decision.reason, / … \[truncated \d+ bytes\]$/);
+    },
+  );
+});
+
+test("R4: a multibyte reason is cut on a character boundary and still parses", { timeout: 30000 }, async () => {
+  // A naive byte cut would emit half a character and the decision would stop
+  // being JSON — which denies on this platform.
+  await withServer(
+    () => bigBodyServer("😀".repeat(60_000), 503),
+    async (server) => {
+      const result = await runInterceptor({
+        stdin: JSON.stringify(capturedPayload()),
+        env: childEnv({
+          DENIED_URL: server.url,
+          DENIED_API_KEY: "dn_test",
+          DENIED_FAIL_MODE: "closed",
+        }),
+      });
+
+      const decision = assertDecision(result, "R4 multibyte reason");
+      assert.equal(decision.decision, "deny");
+      assert.ok(Buffer.byteLength(decision.reason, "utf-8") <= MAX_REASON_BYTES);
+      assert.equal(decision.reason.includes("�"), false, "replacement character in the reason");
+      assert.equal(
+        /[\uD800-\uDFFF]/.test(decision.reason.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "")),
+        false,
+        "lone surrogate in the reason",
+      );
+      assert.match(decision.reason, /😀/);
+    },
+  );
+});
+
+test("R4: a response over MAX_RESPONSE_BYTES routes through failMode", { timeout: 30000 }, async () => {
+  // An unbounded res.json() on a large body is an out-of-memory abort (SIGABRT,
+  // uncatchable, empty stdout). Overflow is reported instead of truncated: a
+  // cut JSON body is not the PDP's answer, so even a leading `"decision":true`
+  // must not be honoured.
+  const oversized = JSON.stringify({
+    decision: true,
+    padding: "p".repeat(MAX_RESPONSE_BYTES + 200_000),
+  });
+  assert.ok(Buffer.byteLength(oversized, "utf-8") > MAX_RESPONSE_BYTES);
+
+  await withServer(
+    () =>
+      startStubServer((req, res) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(oversized);
+      }),
+    async (server) => {
+      const [open, closed] = await Promise.all([
+        runInterceptor({
+          stdin: JSON.stringify(capturedPayload()),
+          env: childEnv({
+            DENIED_URL: server.url,
+            DENIED_API_KEY: "dn_test",
+            DENIED_FAIL_MODE: "open",
+          }),
+        }),
+        runInterceptor({
+          stdin: JSON.stringify(capturedPayload()),
+          env: childEnv({
+            DENIED_URL: server.url,
+            DENIED_API_KEY: "dn_test",
+            DENIED_FAIL_MODE: "closed",
+          }),
+        }),
+      ]);
+
+      assert.equal(assertDecision(open, "R4 overflow open").decision, "allow");
+      assert.equal(assertDecision(closed, "R4 overflow closed").decision, "deny");
+      for (const result of [open, closed]) {
+        assert.match(result.stderr, new RegExp(`response exceeded ${MAX_RESPONSE_BYTES} bytes`));
+        assert.ok(result.durationMs < WATCHDOG_MS, `took ${result.durationMs}ms`);
+      }
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// R5 — Config deadline and config/stdin concurrency
+// ---------------------------------------------------------------------------
+
+test("R5: a config file that never resolves decides at its own deadline, not the watchdog", { timeout: 40000 }, async () => {
+  const fifo = makeFifo("stalled-config.fifo");
+  if (!fifo) {
+    return; // no FIFOs on this platform
+  }
+  const url = await closedPortUrl();
+
+  const stalled = await runUntilDecision({
+    stdin: JSON.stringify(capturedPayload()),
+    env: childEnv({ DENIED_CONFIG: fifo, DENIED_URL: url, DENIED_API_KEY: "dn_test" }),
+    until: (state) => /timed out/.test(state.stderr),
+  });
+
+  assert.notEqual(stalled.decisionMs, null, `no decision on stdout: ${stalled.stderr}`);
+  const decision = JSON.parse(stalled.stdout);
+  assert.ok(
+    stalled.decisionMs >= DEFAULT_CONFIG_TIMEOUT_MS - 200,
+    `decided before the config deadline (${stalled.decisionMs}ms)`,
+  );
+  assert.ok(
+    stalled.decisionMs < WATCHDOG_MS - 1_000,
+    `the watchdog decided this, not the config deadline (${stalled.decisionMs}ms)`,
+  );
+  // "Your settings exist and did not arrive" is a different situation from "you
+  // have no settings", and only the first one warns.
+  assert.match(
+    stalled.stderr,
+    new RegExp(`Config read at .* timed out after ${DEFAULT_CONFIG_TIMEOUT_MS}ms`),
+  );
+  assert.match(stalled.stderr, /failMode may not be yours/);
+  // The documented residual, pinned so a future silent change is caught: an
+  // unresolvable config decides on the built-in default, which is `open`. A
+  // `failMode: closed` sitting unread in that file does not apply.
+  assert.equal(decision.decision, "allow");
+  assert.match(decision.reason, /fail-mode is open/);
+
+  // The control: a config file that is merely absent stays quiet.
+  const absent = await runInterceptor({
+    stdin: JSON.stringify(capturedPayload()),
+    env: childEnv({ DENIED_URL: url, DENIED_API_KEY: "dn_test" }),
+  });
+  assert.equal(assertDecision(absent, "R5 absent config").decision, "allow");
+  assert.equal(/timed out/.test(absent.stderr), false, absent.stderr);
+  assert.ok(absent.durationMs < DEFAULT_CONFIG_TIMEOUT_MS, `took ${absent.durationMs}ms`);
+});
+
+test("R5: the config read and the stdin read run concurrently", { timeout: 40000 }, async () => {
+  // Sequenced, a stalled config file would spend the stdin budget as well and
+  // push the decision into the watchdog. Timing is the only way to see it:
+  // concurrent ≈ max(1000, 2000) = 2000ms, serialized ≈ 3000ms.
+  const fifo = makeFifo("concurrent-config.fifo");
+  if (!fifo) {
+    return;
+  }
+  await withServer(
+    () => jsonServer(ALLOW_BODY),
+    async (server) => {
+      const result = await runUntilDecision({
+        keepStdinOpen: true, // the host may never close the pipe
+        env: childEnv({ DENIED_CONFIG: fifo, DENIED_URL: server.url, DENIED_API_KEY: "dn_test" }),
+      });
+
+      assert.notEqual(result.decisionMs, null, `no decision on stdout: ${result.stderr}`);
+      assert.equal(JSON.parse(result.stdout).decision, "allow");
+      assert.ok(
+        result.decisionMs >= DEFAULT_STDIN_TIMEOUT_MS - 300,
+        `decided before the stdin deadline (${result.decisionMs}ms)`,
+      );
+      assert.ok(
+        // Halfway between the concurrent and the serialized cost, expressed in
+        // the constants so it tracks a change to either deadline.
+        result.decisionMs < DEFAULT_STDIN_TIMEOUT_MS + DEFAULT_CONFIG_TIMEOUT_MS * 0.6,
+        `the config read and the stdin read were serialized (${result.decisionMs}ms; concurrent ≈ ${DEFAULT_STDIN_TIMEOUT_MS}ms, serialized ≈ ${DEFAULT_STDIN_TIMEOUT_MS + DEFAULT_CONFIG_TIMEOUT_MS}ms)`,
+      );
+      assert.equal(server.requests.length, 1);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// R6 — Blank and invalid failMode values
+// ---------------------------------------------------------------------------
+
+test("R6: a blank failMode warns instead of silently falling back to open", () => {
+  // "Present but blank" is not absence: `""` and `"   "` are strings a user
+  // typed or a template rendered empty, and on a platform where the config file
+  // is the only practical mechanism they would otherwise land silently on the
+  // permissive side.
+  for (const blank of ["", "   "]) {
+    const envWarnings = [];
+    const envCfg = resolveConfig({ DENIED_FAIL_MODE: blank }, {}, (m) => envWarnings.push(m));
+    assert.equal(envCfg.failMode, "open");
+    assert.deepEqual(envWarnings, [
+      'Ignoring blank DENIED_FAIL_MODE; falling back to the config file or "open".',
+    ]);
+
+    const fileWarnings = [];
+    const fileCfg = resolveConfig({}, { failMode: blank }, (m) => fileWarnings.push(m));
+    assert.equal(fileCfg.failMode, "open");
+    assert.deepEqual(fileWarnings, [
+      'Ignoring blank failMode in the config file; falling back to "open".',
+    ]);
+  }
+});
+
+test("R6: a blank DENIED_FAIL_MODE still lets the config file decide", () => {
+  const warnings = [];
+  const cfg = resolveConfig({ DENIED_FAIL_MODE: "" }, { failMode: "closed" }, (m) => warnings.push(m));
+  assert.equal(cfg.failMode, "closed");
+  assert.equal(warnings.length, 1);
+});
+
+// A whitespace-only env var is truthy, so it would win over a valid config
+// value and then fail every fetch — a silent fail-open under the default
+// failMode, from the same class as the blank-failMode finding.
+test("R6: a whitespace-only DENIED_URL/DENIED_API_KEY warns and defers to the file", () => {
+  const warnings = [];
+  const cfg = resolveConfig(
+    { DENIED_URL: "   ", DENIED_API_KEY: "  " },
+    { url: "https://internal.pdp", apiKey: "dn_real" },
+    (m) => warnings.push(m),
+    "/home/dev",
+  );
+  assert.equal(cfg.url, "https://internal.pdp");
+  assert.equal(cfg.apiKey, "dn_real");
+  assert.deepEqual(warnings, [
+    "Ignoring blank DENIED_URL; falling back to the config file value.",
+    "Ignoring blank DENIED_API_KEY; falling back to the config file value.",
+  ]);
+});
+
+test("R6: empty and valid DENIED_URL values are unaffected by the blank check", () => {
+  const emptyWarnings = [];
+  const empty = resolveConfig(
+    { DENIED_URL: "" },
+    { url: "https://internal.pdp" },
+    (m) => emptyWarnings.push(m),
+    "/home/dev",
+  );
+  assert.equal(empty.url, "https://internal.pdp");
+  assert.deepEqual(emptyWarnings, []);
+
+  const setWarnings = [];
+  const set = resolveConfig(
+    { DENIED_URL: "https://env.pdp" },
+    { url: "https://file.pdp" },
+    (m) => setWarnings.push(m),
+    "/home/dev",
+  );
+  assert.equal(set.url, "https://env.pdp");
+  assert.deepEqual(setWarnings, []);
+});
+
+test("R6: a non-string failMode warns with its type and falls back to open", () => {
+  for (const [value, described] of [
+    [true, "boolean"],
+    [["closed"], "array"],
+    [null, "null"],
+    [0, "number"],
+    [{ mode: "closed" }, "object"],
+  ]) {
+    const warnings = [];
+    const cfg = resolveConfig({}, { failMode: value }, (m) => warnings.push(m));
+    assert.equal(cfg.failMode, "open", JSON.stringify(value));
+    assert.deepEqual(
+      warnings,
+      [`Ignoring non-string failMode (${described}) in the config file; falling back to "open".`],
+      JSON.stringify(value),
+    );
+  }
+});
+
+test("R6: an absent failMode reaches the default in silence", () => {
+  // Absence is the only thing allowed through quietly.
+  const warnings = [];
+  assert.equal(resolveConfig({}, {}, (m) => warnings.push(m)).failMode, "open");
+  assert.equal(resolveConfig({}, { url: "https://x" }, (m) => warnings.push(m)).failMode, "open");
+  assert.equal(
+    resolveConfig({ DENIED_URL: "https://x" }, {}, (m) => warnings.push(m)).failMode,
+    "open",
+  );
+  assert.deepEqual(warnings, []);
+});
+
+test("R6: a blank failMode is reported on stderr end to end", { timeout: 30000 }, async () => {
+  const configPath = await writeJson(tmpPath("r6-blank-config.json"), {
+    apiKey: "dn_file",
+    failMode: "   ",
+  });
+  await withServer(
+    () => jsonServer(ALLOW_BODY),
+    async (server) => {
+      const result = await runInterceptor({
+        stdin: JSON.stringify(capturedPayload()),
+        env: childEnv({ DENIED_CONFIG: configPath, DENIED_URL: server.url }),
+      });
+      assert.equal(assertDecision(result, "R6 blank failMode").decision, "allow");
+      assert.match(result.stderr, /Ignoring blank failMode in the config file/);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// R7 — Emission tracked by delivery, not by intent
+// ---------------------------------------------------------------------------
+
+test("R7: a throwing writer leaves the emission unclaimed so the exit net stays armed", () => {
+  // The writer records a partial delivery itself, so a writer that threw
+  // without delivering anything means nothing reached stdout — and the exit net
+  // still owes a whole object. Marking the emission done here would leave
+  // stdout empty and the outcome to the host.
+  resetEmitState();
+  try {
+    assert.throws(
+      () =>
+        emitDecision("deny", "nope", () => {
+          throw new Error("stdout is gone");
+        }),
+      /stdout is gone/,
+    );
+    assert.equal(hasEmitted(), false, "a failed write must not count as an emission");
+
+    // ...and the retry the exit net would make still produces one whole object.
+    const written = [];
+    assert.equal(emitDecision("deny", "nope", (text) => written.push(text)), true);
+    assert.equal(hasEmitted(), true);
+    assert.deepEqual(written, ['{"decision":"deny","reason":"nope"}']);
+  } finally {
+    resetEmitState();
+  }
+});
+
+test("R7: a re-entrant emit is still suppressed while the first is on the stack", () => {
+  // A second complete object after the first is exactly as unparseable as a
+  // fragment, so the guard has to hold while a writer is mid-flight — not only
+  // after it returns.
+  resetEmitState();
+  try {
+    const written = [];
+    const reentrant = (text) => {
+      written.push(text);
+      assert.equal(
+        emitDecision("deny", "late", (nested) => written.push(nested)),
+        false,
+        "a re-entrant emit must be suppressed",
+      );
+    };
+    assert.equal(emitDecision("allow", "", reentrant), true);
+    assert.deepEqual(written, ['{"decision":"allow"}']);
+    assert.equal(hasEmitted(), true);
+  } finally {
+    resetEmitState();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// R8 — Linearity of the effect tables and the transcript scan
+// ---------------------------------------------------------------------------
+
+test("R8: inferShellEffect stays linear on echo/redirect ReDoS shapes", () => {
+  // `echo(?!\s.*>)` guarded the "read" classification, and its unanchored
+  // greedy `.*` was re-evaluated to end-of-string at *every* `echo`: 156ms at
+  // 80 KB, 621ms at 160 KB, 2.5s at 320 KB, 26s at 1 MB on the unfixed build —
+  // all synchronous, so the host's timeout decided the tool call instead of us.
+  for (const size of [80_000, 320_000, 1_000_000]) {
+    const units = Math.floor(size / 5);
+    assertLinearCost(
+      inferShellEffect,
+      `${"echo ".repeat(units)}>`,
+      `${"zcho ".repeat(units)}>`,
+      `R8 inferShellEffect, echo run with a trailing redirect at ${size}B`,
+    );
+    assertLinearCost(
+      inferShellEffect,
+      "echo ".repeat(units),
+      "zcho ".repeat(units),
+      `R8 inferShellEffect, echo run with no redirect at ${size}B`,
+    );
+  }
+});
+
+test("R8: inferEffect stays linear on add_*_member tool-name shapes", () => {
+  // The second copy of the same bug, and the one a reviewer cleared by
+  // inspection: `(^|_)` restarts the match at every underscore, and at every
+  // one that begins `add_` the greedy `.*` ran to end-of-string and backtracked.
+  // 7ms at 8 KB, 98ms at 32 KB, 1.56s at 128 KB on the unfixed build — on a
+  // string that arrives straight from the payload as `resource.id`.
+  const byName = (name) => inferEffect(name, {});
+  for (const size of [8_192, 32_768, 131_072]) {
+    const units = Math.floor(size / 4);
+    assertLinearCost(
+      byName,
+      "add_".repeat(units),
+      "zdd_".repeat(units),
+      `R8 inferEffect, add_ run at ${size}B`,
+    );
+  }
+  for (const size of [8_192, 32_768]) {
+    const units = Math.floor(size / 6);
+    assertLinearCost(
+      byName,
+      "add_x_".repeat(units),
+      "zdd_x_".repeat(units),
+      `R8 inferEffect, add_<segment>_ run at ${size}B`,
+    );
+  }
+});
+
+test("R8: the effect tables still classify the shapes those inputs are built from", () => {
+  // Linearity bought by no longer matching would be no fix at all.
+  assert.equal(inferShellEffect("echo hi"), "read");
+  assert.equal(inferShellEffect("echo hi > out.txt"), "create");
+  assert.equal(inferEffect("add_project_member", {}), "update");
+  assert.equal(inferEffect("share_document", {}), "update");
+  // Documented cost of the `[^_]*` bound: a multi-segment role no longer
+  // matches the member pattern and falls through to `add` → create. The tool
+  // name itself still reaches the PDP verbatim, and the effect is advisory.
+  assert.equal(inferEffect("add_org_team_member", {}), "create");
+});
+
+test("R8: extractLastUserPrompt stays linear on unclosed USER_REQUEST markers", () => {
+  // `/<USER_REQUEST>\n([\s\S]*?)\n<\/USER_REQUEST>/` is quadratic in the number
+  // of *unclosed* opening markers in one record: 43ms at 5,000 markers, 173ms
+  // at 10,000, 695ms at 20,000. DEFAULT_TAIL_BYTES capped the window at 64 KB,
+  // so it was not reachable — but the window was the only thing holding the
+  // line, and a larger tail is one config change away.
+  for (const markers of [2_500, 10_000, 20_000]) {
+    const hostileContent = USER_REQUEST_OPEN_MARKER.repeat(markers);
+    const hostile = `${JSON.stringify({ type: "USER_INPUT", content: hostileContent })}\n`;
+    const control = `${JSON.stringify({
+      type: "USER_INPUT",
+      content: hostileContent.replace(/[<>]/g, "z"),
+    })}\n`;
+    assertLinearCost(
+      extractLastUserPrompt,
+      hostile,
+      control,
+      `R8 extractLastUserPrompt, ${markers} unclosed markers`,
+    );
+  }
+});
+
+test("R8: extractLastUserPrompt still fails short rather than open on a nested marker", () => {
+  // Semantics pinned alongside the linearity: the first opening marker, then
+  // the earliest closing marker after it.
+  const content = `${USER_REQUEST_OPEN_MARKER}run whoami\n</USER_REQUEST>\n<USER_SETTINGS_CHANGE>\nx\n</USER_SETTINGS_CHANGE>`;
+  const line = JSON.stringify({ type: "USER_INPUT", content });
+  assert.equal(extractLastUserPrompt(`${line}\n`), "run whoami");
+  const unclosed = JSON.stringify({
+    type: "USER_INPUT",
+    content: USER_REQUEST_OPEN_MARKER.repeat(3),
+  });
+  assert.equal(
+    extractLastUserPrompt(`${unclosed}\n`),
+    USER_REQUEST_OPEN_MARKER.repeat(3),
+  );
+});
+
+test("R8: the pre-fix shell, tool-name and transcript patterns would have failed the bound", () => {
+  // The probes that make the three R8 guards meaningful. Budget disabled so
+  // only the machine-independent ratio can fire; sizes chosen so a single
+  // pre-fix call costs ~100–200ms rather than the seconds the full-size inputs
+  // would take.
+  const shellUnits = 80_000 / 5;
+  assert.throws(
+    () =>
+      assertLinearCost(
+        preFixInferShellEffect,
+        `${"echo ".repeat(shellUnits)}>`,
+        `${"zcho ".repeat(shellUnits)}>`,
+        "R8 pre-fix shell probe",
+        { iterations: 1, trials: 1, budgetMs: Infinity },
+      ),
+    /over the 40× bound/,
+    "the pre-fix echo lookahead must fail the bound the fixed table passes",
+  );
+
+  const nameUnits = 32_768 / 4;
+  assert.throws(
+    () =>
+      assertLinearCost(
+        preFixInferEffect,
+        "add_".repeat(nameUnits),
+        "zdd_".repeat(nameUnits),
+        "R8 pre-fix tool-name probe",
+        { iterations: 1, trials: 1, budgetMs: Infinity },
+      ),
+    /over the 40× bound/,
+    "the pre-fix add_.*_member pattern must fail the bound the fixed table passes",
+  );
+
+  const markers = 10_000;
+  const hostileContent = USER_REQUEST_OPEN_MARKER.repeat(markers);
+  assert.throws(
+    () =>
+      assertLinearCost(
+        preFixExtractLastUserPrompt,
+        hostileContent,
+        hostileContent.replace(/[<>]/g, "z"),
+        "R8 pre-fix transcript probe",
+        { iterations: 1, trials: 1, budgetMs: Infinity },
+      ),
+    /over the 40× bound/,
+    "the pre-fix USER_REQUEST regex must fail the bound the fixed scan passes",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// R9 — MAX_TOOL_NAME_BYTES
+// ---------------------------------------------------------------------------
+
+test("R9: an oversized tool name is truncated with a visible marker", () => {
+  // A megabyte-long "tool name" is not a tool name: it reaches the PDP as
+  // resource.id and is run through every NAME_EFFECT_PATTERN on the way.
+  const name = "T".repeat(8_000);
+  const { name: bounded } = normalizeToolCall({ toolCall: { name } });
+  assert.ok(
+    Buffer.byteLength(bounded, "utf-8") <= MAX_TOOL_NAME_BYTES,
+    `tool name was ${Buffer.byteLength(bounded, "utf-8")} bytes`,
+  );
+  assert.match(bounded, /^TTTT/);
+  assert.match(bounded, / … \[truncated 8000 bytes\]$/);
+
+  // A name at the boundary is left exactly as it arrived.
+  const exact = "n".repeat(MAX_TOOL_NAME_BYTES);
+  assert.equal(normalizeToolCall({ toolCall: { name: exact } }).name, exact);
+});
+
+test("R9: the bounded tool name is what reaches the PDP", { timeout: 30000 }, async () => {
+  const name = "T".repeat(8_000);
+  const body = buildCheckBody({ toolCall: { name } }, TEST_CONFIG);
+  assert.equal(body.resource.id, body.action.properties.tool_name);
+  assert.ok(Buffer.byteLength(body.resource.id, "utf-8") <= MAX_TOOL_NAME_BYTES);
+
+  await withServer(
+    () => jsonServer(ALLOW_BODY),
+    async (server) => {
+      const result = await runInterceptor({
+        stdin: JSON.stringify(capturedPayload({ toolCall: { name, args: { Cwd: "/w" } } })),
+        env: childEnv({ DENIED_URL: server.url, DENIED_API_KEY: "dn_test" }),
+      });
+
+      assert.equal(assertDecision(result, "R9").decision, "allow");
+      assert.equal(server.requests.length, 1);
+      const sent = server.requests[0].json;
+      // Bounded, but still delivered: the check is never skipped over a name.
+      assert.ok(Buffer.byteLength(sent.resource.id, "utf-8") <= MAX_TOOL_NAME_BYTES);
+      assert.match(sent.resource.id, / … \[truncated 8000 bytes\]$/);
+      assert.equal(sent.action.properties.tool_name, sent.resource.id);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// R10 — MAX_STDIN_BYTES and repairTruncatedJson
+// ---------------------------------------------------------------------------
+
+test("R10: repairTruncatedJson rebuilds a parseable object from every cut shape", () => {
+  // Dropping an oversized payload throws away the two fields policy needs most
+  // (resource.id and subject.id), and they are exactly the fields a caller
+  // cannot move past the cut.
+  const table = [
+    ['{"a":"hello wor', { a: "hello wor" }, "cut mid string value"],
+    ['{"a":1,"bcd', { a: 1 }, "cut mid key — rewind, a closed string cannot precede }"],
+    ['{"a":1,', { a: 1 }, "dangling comma — the safe point sits before it"],
+    ['{"a":[1,2,', { a: [1, 2] }, "dangling comma inside an array"],
+    ['{"a":"x\\u12', { a: "x" }, "cut inside a \\uXXXX escape"],
+    ['{"a":"x\\', { a: "x" }, "cut on a trailing backslash"],
+    [
+      '{"a":{"b":[1,2,{"c":"de',
+      { a: { b: [1, 2, { c: "de" }] } },
+      "nested containers all closed in order",
+    ],
+    ['{"a":1}', { a: 1 }, "an already complete document is returned as-is"],
+    ["{", {}, "nothing but an opening brace still parses"],
+    ['{"a":1,"b":{', { a: 1, b: {} }, "an empty nested container closes"],
+  ];
+  for (const [input, expected, why] of table) {
+    const repaired = repairTruncatedJson(input);
+    assert.deepEqual(repaired, expected, `${why}: ${input}`);
+    // A repair that does not parse is not a repair.
+    assert.deepEqual(JSON.parse(JSON.stringify(repaired)), expected, why);
+  }
+});
+
+test("R10: repairTruncatedJson returns null rather than guessing", () => {
+  for (const input of ["", "xyz", "[1,2", "[1,2]", "null", "42", '"str', null, undefined, 7]) {
+    assert.equal(repairTruncatedJson(input), null, JSON.stringify(input));
+  }
+});
+
+test("R10: repairTruncatedJson never throws on any prefix of a real payload", () => {
+  // The cut lands wherever the ceiling falls, so every offset is reachable.
+  const document = JSON.stringify(
+    capturedPayload({
+      toolCall: {
+        name: "write_to_file",
+        args: {
+          TargetFile: "/w/p/big.txt",
+          CodeContent: 'line one\n"quoted"\\ é 😀 tail',
+          Nested: { list: [1, 2, { deep: "value" }], flag: true, empty: {} },
+        },
+      },
+    }),
+  );
+  let recovered = 0;
+  for (let cut = 1; cut <= document.length; cut += 1) {
+    const repaired = repairTruncatedJson(document.slice(0, cut));
+    if (repaired === null) {
+      continue;
+    }
+    assert.ok(
+      repaired && typeof repaired === "object" && !Array.isArray(repaired),
+      `offset ${cut} produced a non-object`,
+    );
+    // Parse-verified, exactly as the repair path promises.
+    JSON.parse(JSON.stringify(repaired));
+    recovered += 1;
+  }
+  assert.ok(recovered > document.length * 0.9, `only ${recovered}/${document.length} offsets recovered`);
+  // The fields policy needs most survive a cut anywhere past them.
+  const past = document.indexOf('"CodeContent"') + 20;
+  const repaired = repairTruncatedJson(document.slice(0, past));
+  assert.equal(repaired.toolCall.name, "write_to_file");
+  assert.equal(repaired.conversationId, "435c93dd-d1ea-4fac-988d-c8e1eb9f5c76");
+});
+
+test("R10: an oversized stdin payload still sends the check, marked degraded", { timeout: 40000 }, async () => {
+  // Time alone bounded stdin until this cap existed: everything that arrived
+  // inside the deadline was buffered, stringified ~4x and deep-copied twice on
+  // the synchronous decision path. Exceeding the cap must never cancel the
+  // check — the deny the PDP would have given would be replaced by failMode.
+  const oversized = JSON.stringify({
+    ...capturedPayload({ conversationId: "conv-oversized" }),
+    toolCall: {
+      name: "write_to_file",
+      args: {
+        TargetFile: "/w/p/big.txt",
+        CodeContent: "x".repeat(MAX_STDIN_BYTES + 512 * 1024),
+      },
+    },
+  });
+  assert.ok(Buffer.byteLength(oversized, "utf-8") > MAX_STDIN_BYTES);
+
+  await withServer(
+    () => jsonServer({ decision: false, context: { reason: "policy says no" } }),
+    async (server) => {
+      const result = await runInterceptor({
+        stdin: oversized,
+        env: childEnv({ DENIED_URL: server.url, DENIED_API_KEY: "dn_test" }),
+      });
+
+      const decision = assertDecision(result, "R10 oversized stdin");
+      assert.equal(decision.decision, "deny");
+      assert.equal(decision.reason, "policy says no");
+      assert.ok(result.durationMs < WATCHDOG_MS, `took ${result.durationMs}ms`);
+
+      assert.equal(server.requests.length, 1);
+      const sent = server.requests[0].json;
+      // The two fields policy needs most survived the cut.
+      assert.equal(sent.resource.id, "write_to_file");
+      assert.equal(sent.subject.id, "conv-oversized");
+      // And the PDP is told it is judging a cut payload.
+      assert.equal(sent.context.stdin_truncated, true);
+      assert.equal(sent.context.stdin_bytes_read, MAX_STDIN_BYTES);
+      assert.equal(sent.context.stdin_max_bytes, MAX_STDIN_BYTES);
+      assert.equal(sent.context.payload_fidelity, "repaired");
+      assert.match(result.stderr, new RegExp(`exceeded ${MAX_STDIN_BYTES} bytes`));
+      assert.match(result.stderr, /repaired payload/);
+    },
+  );
+});
+
+test("R10: a normal payload carries no stdin-truncation context keys at all", { timeout: 30000 }, async () => {
+  // The absence is load-bearing: buildCheckBody's full-body deepEqual test
+  // would pass just as happily with these keys always present, and a policy
+  // that keys off `stdin_truncated` would then see every payload as degraded.
+  const body = buildCheckBody(capturedPayload(), TEST_CONFIG);
+  for (const key of [
+    "stdin_truncated",
+    "stdin_bytes_read",
+    "stdin_max_bytes",
+    "payload_fidelity",
+  ]) {
+    assert.equal(key in body.context, false, `${key} must be absent on a normal payload`);
+  }
+
+  await withServer(
+    () => jsonServer(ALLOW_BODY),
+    async (server) => {
+      const result = await runInterceptor({
+        stdin: JSON.stringify(capturedPayload()),
+        env: childEnv({ DENIED_URL: server.url, DENIED_API_KEY: "dn_test" }),
+      });
+      assert.equal(assertDecision(result, "R10 normal payload").decision, "allow");
+      const context = server.requests[0].json.context;
+      for (const key of [
+        "stdin_truncated",
+        "stdin_bytes_read",
+        "stdin_max_bytes",
+        "payload_fidelity",
+      ]) {
+        assert.equal(key in context, false, `${key} reached the PDP on a normal payload`);
+      }
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// R11 (H14) — a wedged audit sink must not replace a real decision
+// ---------------------------------------------------------------------------
+
+test("R11 (H14): a wedged audit sink cannot replace a real deny", { timeout: 40000 }, async () => {
+  // Audit is observability, never a gate on the decision — and "never a gate"
+  // has to include *time*. The audit used to be awaited ahead of the emit, so
+  // on a wedged sink the watchdog fired and a real deny became the failMode
+  // outcome: silently an *allow* under the default failMode: open.
+  //
+  // The child does not exit afterwards, and cannot: a libuv threadpool thread
+  // blocked in open(2) cannot be joined, so neither process.exit(0) nor the
+  // watchdog can end it. That is a known platform limitation, and it is exactly
+  // why the decision has to be on stdout before the audit is attempted.
+  const auditDir = await tmpDir("r11-audit");
+  const fifo = makeFifoAt(path.join(auditDir, "denied-antigravity-hook.jsonl"));
+  if (!fifo) {
+    return;
+  }
+  const configPath = await writeJson(tmpPath("r11-config.json"), {
+    apiKey: "dn_file",
+    audit: { enabled: true, dir: auditDir },
+  });
+
+  // The same run against a sink that works, as a baseline: both children pay
+  // the same startup, config and PDP cost, so the difference between them is
+  // the audit and nothing else. That is what makes the timing assertion below
+  // machine-independent — an audit awaited *before* the emit would push the
+  // wedged run a full audit deadline past this baseline.
+  const workingDir = await tmpDir("r11-audit-ok");
+  const workingConfig = await writeJson(tmpPath("r11-config-ok.json"), {
+    apiKey: "dn_file",
+    audit: { enabled: true, dir: workingDir },
+  });
+
+  await withServer(
+    () => jsonServer({ decision: false, context: { reason: "policy says no" } }),
+    async (server) => {
+      const baseline = await runUntilDecision({
+        stdin: JSON.stringify(capturedPayload()),
+        env: childEnv({ DENIED_CONFIG: workingConfig, DENIED_URL: server.url }),
+        // decisionMs is stamped when the decision lands, but this child is left
+        // to exit on its own so its audit record actually gets written.
+        until: (state) => state.exited,
+      });
+      assert.notEqual(baseline.decisionMs, null, `no baseline decision: ${baseline.stderr}`);
+
+      const result = await runUntilDecision({
+        stdin: JSON.stringify(capturedPayload()),
+        env: childEnv({ DENIED_CONFIG: configPath, DENIED_URL: server.url }),
+        until: (state) => /abandoning the record/.test(state.stderr),
+      });
+
+      assert.notEqual(result.decisionMs, null, `no decision on stdout: ${result.stderr}`);
+      // The decision goes out *before* the audit is attempted, so a sink that
+      // never accepts anything costs the decision nothing.
+      assert.ok(
+        result.decisionMs <= baseline.decisionMs + DEFAULT_AUDIT_TIMEOUT_MS * 0.6,
+        `the decision waited on the audit sink (${result.decisionMs}ms vs a ${baseline.decisionMs}ms baseline; an audit awaited before the emit costs ${DEFAULT_AUDIT_TIMEOUT_MS}ms)`,
+      );
+      const decision = JSON.parse(result.stdout);
+      // The PDP's real answer, not a fail-safe.
+      assert.equal(decision.decision, "deny");
+      assert.equal(decision.reason, "policy says no");
+      assert.equal(result.stdout, '{"decision":"deny","reason":"policy says no"}');
+      // Promptly: measured ~125ms, and far below the watchdog that used to
+      // decide this.
+      assert.ok(
+        result.decisionMs < 3_000,
+        `the decision waited on the audit sink (${result.decisionMs}ms)`,
+      );
+      assert.ok(result.decisionMs < WATCHDOG_MS, `${result.decisionMs}ms`);
+      assert.match(
+        result.stderr,
+        new RegExp(`Audit write did not complete within ${DEFAULT_AUDIT_TIMEOUT_MS}ms`),
+      );
+      assert.match(result.stderr, /abandoning the record rather than delaying the decision/);
+      assert.equal(server.requests.length, 2); // the baseline child and this one
+      // The baseline's record did land, so the wedged run is the only variable.
+      const written = await fs.readFile(
+        path.join(workingDir, "denied-antigravity-hook.jsonl"),
+        "utf-8",
+      );
+      assert.equal(written.trim().split("\n").length, 1);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// R12 (H15) — short-write integrity
+// ---------------------------------------------------------------------------
+
+// writeAllSync / writeStdout are not exported (they are the process's own I/O
+// path, not library functions), so a short write can only be forced end to end:
+// a `-r` preload patches require("node:fs").writeSync before interceptor.js
+// destructures it, accepts N bytes on the first stdout write, and then fails.
+function shortWritePreload({ accept = 5, failures = 1, killStdoutStream = true }) {
+  return `
+const fs = require("node:fs");
+const realWriteSync = fs.writeSync;
+let stdoutCalls = 0;
+fs.writeSync = function (fd, ...rest) {
+  if (fd !== 1) {
+    return realWriteSync.call(fs, fd, ...rest);
+  }
+  stdoutCalls += 1;
+  if (stdoutCalls === 1) {
+    const [buffer, offset, length] = rest;
+    const partial = Math.min(${accept}, length);
+    realWriteSync.call(fs, fd, buffer, offset, partial);
+    return partial; // a short write: the caller owns the remainder
+  }
+  if (stdoutCalls <= 1 + ${failures}) {
+    const err = new Error("denied-test-forced-write-failure");
+    err.code = "EIO"; // non-retryable, so writeAllSync returns short
+    throw err;
+  }
+  return realWriteSync.call(fs, fd, ...rest);
+};
+${
+  killStdoutStream
+    ? 'process.stdout.write = () => { throw new Error("denied-test-dead-stdout-stream"); };\n'
+    : ""
+}
+`;
+}
+
+test("R12 (H15): a short write is finished by the async flush, never duplicated", { timeout: 30000 }, async () => {
+  // A short write used to set the "already emitted" flag while the remainder
+  // was still unwritten, so an exit before the flush landed left a *fragment*
+  // on stdout — zero complete objects.
+  const preload = await writePreload(
+    "r12-short-async.js",
+    shortWritePreload({ accept: 5, failures: 1, killStdoutStream: false }),
+  );
+  await withServer(
+    () => jsonServer(ALLOW_BODY),
+    async (server) => {
+      const result = await runInterceptor({
+        preload,
+        stdin: JSON.stringify(capturedPayload()),
+        env: childEnv({ DENIED_URL: server.url, DENIED_API_KEY: "dn_test" }),
+      });
+
+      assert.equal(assertDecision(result, "R12 async flush").decision, "allow");
+      assert.equal(result.stdout, '{"decision":"allow"}');
+      assert.equal(result.stdout.split('{"decision"').length - 1, 1);
+    },
+  );
+});
+
+test("R12 (H15): a short write plus a dead stdout stream is finished by the exit net", { timeout: 30000 }, async () => {
+  // The other direction of the same bug: a writer that threw after part of the
+  // buffer was already on the wire left the flag false, so the exit net wrote a
+  // whole *second* object after the fragment — two objects, unparseable, which
+  // denies on this platform. The net must finish the remainder, never restart.
+  const preload = await writePreload(
+    "r12-short-exit.js",
+    shortWritePreload({ accept: 5, failures: 1, killStdoutStream: true }),
+  );
+  await withServer(
+    () => jsonServer({ decision: false, context: { reason: "nope" } }),
+    async (server) => {
+      const result = await runInterceptor({
+        preload,
+        stdin: JSON.stringify(capturedPayload()),
+        env: childEnv({ DENIED_URL: server.url, DENIED_API_KEY: "dn_test" }),
+      });
+
+      const decision = assertDecision(result, "R12 exit net");
+      assert.equal(decision.decision, "deny");
+      assert.equal(decision.reason, "nope");
+      // Exactly one complete object, assembled from the fragment plus its
+      // remainder — not the fragment plus a second whole object.
+      assert.equal(result.stdout, '{"decision":"deny","reason":"nope"}');
+      assert.equal(result.stdout.split('{"decision"').length - 1, 1);
+      assert.equal(/Failed to flush/.test(result.stderr), false, result.stderr);
+    },
+  );
+});
+
+test("R12 (H15): an undeliverable remainder never becomes a fragment plus a second object", { timeout: 30000 }, async () => {
+  // The unrecoverable case: nothing can deliver the rest. What must still hold
+  // is that stdout carries at most one `decision` — a prefix of the object, and
+  // never a prefix followed by a whole new one.
+  const preload = await writePreload(
+    "r12-short-fatal.js",
+    shortWritePreload({ accept: 5, failures: 1_000, killStdoutStream: true }),
+  );
+  await withServer(
+    () => jsonServer(ALLOW_BODY),
+    async (server) => {
+      const result = await runInterceptor({
+        preload,
+        stdin: JSON.stringify(capturedPayload()),
+        env: childEnv({ DENIED_URL: server.url, DENIED_API_KEY: "dn_test" }),
+      });
+
+      assert.equal(result.code, 0, `expected exit 0, got ${result.code}: ${result.stderr}`);
+      // At most one: the fragment here is shorter than the marker itself, and
+      // the failure this guards against is a *second* complete object after it.
+      assert.ok(
+        result.stdout.split('{"decision"').length - 1 <= 1,
+        `stdout carried a second decision object: ${JSON.stringify(result.stdout)}`,
+      );
+      assert.ok(
+        '{"decision":"allow"}'.startsWith(result.stdout),
+        `stdout was not a prefix of the decision: ${JSON.stringify(result.stdout)}`,
+      );
+      assert.match(result.stderr, /Failed to flush the rest of the decision/);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// R13 — Timeout budget slack
+// ---------------------------------------------------------------------------
+
+test("R13: the timeout budget keeps real slack inside the watchdog and the host timeout", async () => {
+  // Read from the constants and from hooks.json rather than hardcoded, so an
+  // edit that removes the slack fails here instead of in production: JSON
+  // parsing, redaction, the two stringify passes, the audit write and the
+  // response drain all happen outside every deadline, and without the slack a
+  // PDP answering just inside its deadline loses the race to the watchdog and
+  // has its real allow/deny replaced by the failMode outcome.
+  const hooks = JSON.parse(
+    await fs.readFile(path.join(__dirname, "..", "hooks.json"), "utf-8"),
+  );
+  const hostTimeoutMs = hooks["denied-authz"].PreToolUse[0].hooks[0].timeout * 1_000;
+
+  // The config read and the stdin read are concurrent (R5), so only the larger
+  // of the two spends budget — which is only true while config <= stdin.
+  assert.ok(
+    DEFAULT_CONFIG_TIMEOUT_MS <= DEFAULT_STDIN_TIMEOUT_MS,
+    "a config deadline above the stdin deadline silently shrinks the fetch budget",
+  );
+  assert.equal(
+    MAX_TIMEOUT_MS,
+    WATCHDOG_MS -
+      Math.max(DEFAULT_STDIN_TIMEOUT_MS, DEFAULT_CONFIG_TIMEOUT_MS) -
+      DEFAULT_READ_TIMEOUT_MS,
+  );
+  // The default budget must not fill the watchdog exactly; the ceiling may.
+  assert.equal(DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS - BUDGET_SLACK_MS);
+  assert.ok(BUDGET_SLACK_MS > 0, "the default budget has no slack left");
+  assert.equal(
+    DEFAULT_STDIN_TIMEOUT_MS + DEFAULT_TIMEOUT_MS + DEFAULT_READ_TIMEOUT_MS,
+    WATCHDOG_MS - BUDGET_SLACK_MS,
+  );
+  assert.ok(
+    DEFAULT_STDIN_TIMEOUT_MS + DEFAULT_TIMEOUT_MS + DEFAULT_READ_TIMEOUT_MS < WATCHDOG_MS,
+    "stdin + fetch + transcript must fit strictly inside the watchdog",
+  );
+  // The audit deadline lives inside the slack, not beside it.
+  assert.ok(
+    DEFAULT_AUDIT_TIMEOUT_MS < BUDGET_SLACK_MS,
+    "the audit deadline does not fit inside the reserved slack",
+  );
+  // And the watchdog must beat the host, with room for process startup.
+  assert.ok(WATCHDOG_MS < hostTimeoutMs, `${WATCHDOG_MS}ms vs a ${hostTimeoutMs}ms host timeout`);
+  assert.ok(
+    hostTimeoutMs - WATCHDOG_MS >= 1_000,
+    `only ${hostTimeoutMs - WATCHDOG_MS}ms between the watchdog and the host timeout`,
   );
 });
