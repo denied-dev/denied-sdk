@@ -362,15 +362,20 @@ test("loadFileConfig warns and returns {} on malformed JSON", async () => {
   assert.match(warned, /malformed config file/);
 });
 
-test("loadFileConfig ignores valid JSON that is not an object", async () => {
+test("loadFileConfig warns and returns {} on valid JSON that is not an object", async () => {
   const array = await writeJson(tmpPath("array.json"), [1, 2]);
   const scalar = tmpPath("scalar.json");
   await fs.writeFile(scalar, '"hello"', "utf-8");
-  let warned = "";
-  assert.deepEqual(await loadFileConfig(array, (m) => (warned = m)), {});
-  assert.deepEqual(await loadFileConfig(scalar, (m) => (warned = m)), {});
-  // Well-formed JSON of the wrong shape is not a parse failure.
-  assert.equal(warned, "");
+
+  // Wrong-shape JSON discards apiKey and failMode wholesale, so it has to be
+  // as loud as a parse failure rather than silently resolving to defaults.
+  let arrayWarning = "";
+  assert.deepEqual(await loadFileConfig(array, (m) => (arrayWarning = m)), {});
+  assert.match(arrayWarning, /expected a JSON object, found array/);
+
+  let scalarWarning = "";
+  assert.deepEqual(await loadFileConfig(scalar, (m) => (scalarWarning = m)), {});
+  assert.match(scalarWarning, /expected a JSON object, found string/);
 });
 
 test("resolveConfig falls back to defaults with no env or file", () => {

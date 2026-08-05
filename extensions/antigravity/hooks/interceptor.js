@@ -25,14 +25,28 @@ const DEFAULT_CONTEXT_MAX_BYTES = 20_000;
 const DEFAULT_TAIL_BYTES = 65_536; // 64 KB tail window for the transcript read
 
 // Timeout budget. The hook file registers `timeout: 10` (seconds) with the host,
-// so the watchdog must fire first, and the three inner deadlines must fit inside
-// the watchdog: stdin + fetch + transcript < watchdog < host timeout.
+// so the watchdog must fire first, and the inner deadlines must fit inside the
+// watchdog: max(stdin, config) + fetch + transcript < watchdog < host timeout.
+// The config read and the stdin read are independent and run concurrently, so
+// only the larger of the two spends budget — and DEFAULT_CONFIG_TIMEOUT_MS must
+// stay <= DEFAULT_STDIN_TIMEOUT_MS or the fetch budget below shrinks.
 const WATCHDOG_MS = 8_000;
 const DEFAULT_STDIN_TIMEOUT_MS = 2_000;
+const DEFAULT_CONFIG_TIMEOUT_MS = 1_000; // config file read
 const DEFAULT_TIMEOUT_MS = 5_000; // PDP fetch
 const DEFAULT_READ_TIMEOUT_MS = 1_000; // transcript tail read
 const MAX_TIMEOUT_MS =
-  WATCHDOG_MS - DEFAULT_STDIN_TIMEOUT_MS - DEFAULT_READ_TIMEOUT_MS;
+  WATCHDOG_MS -
+  Math.max(DEFAULT_STDIN_TIMEOUT_MS, DEFAULT_CONFIG_TIMEOUT_MS) -
+  DEFAULT_READ_TIMEOUT_MS;
+
+// Inbound bounds. `maxContextBytes` governs only what we send; these govern
+// what we accept and what we print, and both are hard limits rather than
+// settings: an unbounded `res.json()` on a large body is an out-of-memory abort
+// (SIGABRT — uncatchable, zero stdout, every safety net below bypassed), and an
+// unbounded reason writes megabytes into a pipe the host may not be draining.
+const MAX_RESPONSE_BYTES = 1_048_576;
+const MAX_REASON_BYTES = 4_096;
 
 const FAIL_MODES = ["open", "closed", "ask"];
 const DEFAULT_REDACT_KEYS = [
@@ -46,8 +60,12 @@ const DEFAULT_REDACT_KEYS = [
 
 const STDOUT_FD = 1;
 const STDERR_FD = 2;
-// Bounds the EAGAIN retry loop and the async-flush fallback below, so a stalled
-// stdout can never outlive the watchdog.
+// Bounds the EAGAIN retry loop and the async-flush fallback below. It cannot
+// bound a *blocking* write: libuv clears O_NONBLOCK on child stdio, so on a
+// spawned hook writeSync blocks inside the syscall instead of throwing EAGAIN
+// and no deadline is reachable from JS. What keeps that from hanging is the
+// MAX_REASON_BYTES cap — every emitted object stays a few KB, well inside the
+// OS pipe buffer, so one writeSync always completes even if nothing is reading.
 const FLUSH_GRACE_MS = 500;
 
 // Antigravity gives hooks no environment-variable mechanism of its own on GUI
@@ -66,6 +84,13 @@ function positiveInteger(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function describeType(value) {
+  if (value === null) {
+    return "null";
+  }
+  return Array.isArray(value) ? "array" : typeof value;
+}
+
 function expandHome(value, homedir = os.homedir()) {
   if (typeof value !== "string") {
     return value;
@@ -82,20 +107,64 @@ function resolveConfigPath(env, homedir) {
   return path.join(homedir, ".denied", "config.json");
 }
 
+const CONFIG_UNREADABLE = Symbol("config-unreadable");
+const CONFIG_TIMED_OUT = Symbol("config-timed-out");
+
 // Reads and parses the JSON config file. Returns {} when missing or invalid;
 // surfaces a malformed-file warning so silent misconfiguration is debuggable.
-async function loadFileConfig(configPath, warn = () => {}) {
+//
+// The read carries its own deadline, and it is raced rather than only aborted:
+// a config file on a wedged filesystem (FIFO, NFS, FUSE) blocks in the
+// threadpool where an AbortSignal cannot reach it, and until this resolves the
+// fatal handlers and the watchdog are still holding the env-only default —
+// which silently converts `failMode: closed` into an allow.
+async function loadFileConfig(
+  configPath,
+  warn = () => {},
+  timeoutMs = DEFAULT_CONFIG_TIMEOUT_MS,
+) {
+  const controller = new AbortController();
+  let timer;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(CONFIG_TIMED_OUT);
+    }, timeoutMs);
+  });
   let raw;
   try {
-    raw = await fs.readFile(configPath, "utf-8");
-  } catch {
+    raw = await Promise.race([
+      fs
+        .readFile(configPath, { encoding: "utf-8", signal: controller.signal })
+        .catch(() => CONFIG_UNREADABLE),
+      deadline,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (raw === CONFIG_TIMED_OUT) {
+    // Distinct from "no config file": the user's settings exist and did not
+    // arrive, so whatever is decided next is decided on defaults.
+    warn(
+      `Config read at ${configPath} timed out after ${timeoutMs}ms; deciding on environment variables and defaults instead (failMode may not be yours).`,
+    );
+    return {};
+  }
+  if (raw === CONFIG_UNREADABLE) {
     return {};
   }
   try {
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed
-      : {};
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed;
+    }
+    // Well-formed JSON of the wrong shape discards every setting including
+    // apiKey and failMode, so it cannot pass silently: the file is the primary
+    // configuration surface on this platform.
+    warn(
+      `Ignoring config file at ${configPath}: expected a JSON object, found ${describeType(parsed)}.`,
+    );
+    return {};
   } catch {
     warn(`Ignoring malformed config file at ${configPath} (invalid JSON).`);
     return {};
@@ -131,9 +200,21 @@ function resolveConfig(env, fileConfig, warn = () => {}, homedir = os.homedir())
     timeoutMs = MAX_TIMEOUT_MS;
   }
 
+  // A present-but-unusable failMode of any type is a misconfiguration, and on a
+  // platform where the config file is the only practical mechanism it would
+  // otherwise land silently on the permissive side. Absence is the only thing
+  // that may reach the default quietly.
+  const fileFailMode = Object.hasOwn(source, "failMode")
+    ? source.failMode
+    : undefined;
+  if (fileFailMode !== undefined && typeof fileFailMode !== "string") {
+    warn(
+      `Ignoring non-string failMode (${describeType(fileFailMode)}) in the config file; falling back to "${DEFAULT_FAIL_MODE}".`,
+    );
+  }
   const requestedFailMode = (
     env.DENIED_FAIL_MODE ||
-    (typeof source.failMode === "string" ? source.failMode : "") ||
+    (typeof fileFailMode === "string" ? fileFailMode : "") ||
     DEFAULT_FAIL_MODE
   )
     .toString()
@@ -218,6 +299,35 @@ function isSensitiveKey(key, keys = DEFAULT_REDACT_KEYS) {
   });
 }
 
+// Every pattern below runs on model-controllable text, so each one must cost
+// linear time in the length of that text. The rule that keeps them linear: no
+// two adjacent quantifiers may match the same character. `\s*(?:bearer|basic)?\s+`
+// broke it — the two whitespace runs share every split point, so a long run of
+// spaces followed by no match backtracks quadratically (measured: 120 KB of
+// spaces after `authorization:` took 13 s, 256 KB took 57 s). This work is
+// synchronous, so the watchdog timer cannot fire underneath it and the host's
+// own timeout decides the tool call instead of us.
+const SECRET_STRING_PATTERNS = [
+  // `authorization: <token>`, with the scheme word optional but never sharing
+  // whitespace with the separator that follows it.
+  [/(\bauthorization:\s*(?:(?:bearer|basic)\s+)?)([^\s"';&|]+)/gi, "$1[REDACTED]"],
+  [
+    /(\b(?:api[_-]?key|apikey|token|secret|password|authorization)\b\s*=\s*)([^\s"';&|]+)/gi,
+    "$1[REDACTED]",
+  ],
+  [
+    /(--(?:api[-_]?key|token|secret|password|authorization)(?:=|\s+))([^\s"';&|]+)/gi,
+    "$1[REDACTED]",
+  ],
+];
+
+// Second defence, independent of any pattern's shape: a string this large is
+// bound for a truncated preview anyway (maxContextBytes defaults to 20 KB), so
+// it is cut *before* it is scanned rather than scanned at full length. Cutting
+// first — never passing it through unscanned — is what keeps the tail of a
+// `write_to_file` body from reaching the PDP with its secrets intact.
+const MAX_REDACT_STRING_BYTES = 16_384;
+
 // Catches secrets that ride inside free-form strings — `run_command` command
 // lines are the reason redaction is on by default on this platform. Key-based
 // redaction alone would leave `curl -H "authorization: bearer …"` intact.
@@ -225,19 +335,14 @@ function redactStringSecrets(value) {
   if (typeof value !== "string") {
     return value;
   }
-  return value
-    .replace(
-      /(\bauthorization:\s*(?:bearer|basic)?\s+)([^\s"';&|]+)/gi,
-      "$1[REDACTED]",
-    )
-    .replace(
-      /(\b(?:api[_-]?key|apikey|token|secret|password|authorization)\b\s*=\s*)([^\s"';&|]+)/gi,
-      "$1[REDACTED]",
-    )
-    .replace(
-      /(--(?:api[-_]?key|token|secret|password|authorization)(?:=|\s+))([^\s"';&|]+)/gi,
-      "$1[REDACTED]",
-    );
+  let result =
+    Buffer.byteLength(value, "utf-8") > MAX_REDACT_STRING_BYTES
+      ? truncatePromptString(value, MAX_REDACT_STRING_BYTES)
+      : value;
+  for (const [pattern, replacement] of SECRET_STRING_PATTERNS) {
+    result = result.replace(pattern, replacement);
+  }
+  return result;
 }
 
 // Depth is bounded because this runs before the PDP call: a stack overflow here
@@ -300,7 +405,10 @@ function truncateUtf8(value, maxBytes) {
   return buffer.subarray(0, end).toString("utf-8");
 }
 
-function truncateJsonValue(value, maxBytes) {
+// `priorBytes` carries the size the value had before redaction: redaction can
+// shrink a value below maxBytes (it caps oversized strings), and a payload that
+// was cut must still reach the PDP marked as cut.
+function truncateJsonValue(value, maxBytes, priorBytes = 0) {
   let raw;
   let serializable = value;
   try {
@@ -309,7 +417,7 @@ function truncateJsonValue(value, maxBytes) {
     serializable = String(value);
     raw = JSON.stringify(serializable);
   }
-  const originalBytes = Buffer.byteLength(raw, "utf-8");
+  const originalBytes = Math.max(Buffer.byteLength(raw, "utf-8"), priorBytes);
   if (originalBytes <= maxBytes) {
     return serializable;
   }
@@ -333,12 +441,28 @@ function truncatePromptString(value, maxBytes) {
   return truncateUtf8(value, budget) + marker;
 }
 
-// Redaction runs before truncation so a secret cannot survive inside a preview.
+function jsonByteLength(value) {
+  try {
+    return Buffer.byteLength(JSON.stringify(value) ?? "", "utf-8");
+  } catch {
+    return 0;
+  }
+}
+
+// Redaction runs before truncation so a secret cannot survive inside a preview,
+// and the pre-redaction size decides the truncation marker: redaction caps
+// oversized strings, which can drop a 10 MB payload below maxContextBytes and
+// would otherwise reach the PDP looking complete.
 function boundedContext(value, config) {
-  const redacted = config.redaction?.enabled
-    ? redactValue(value, config.redaction.keys)
-    : value;
-  return truncateJsonValue(redacted, config.maxContextBytes);
+  if (!config.redaction?.enabled) {
+    return truncateJsonValue(value, config.maxContextBytes);
+  }
+  const originalBytes = jsonByteLength(value);
+  return truncateJsonValue(
+    redactValue(value, config.redaction.keys),
+    config.maxContextBytes,
+    originalBytes,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -588,9 +712,30 @@ function extractLastUserPrompt(text) {
   return null;
 }
 
+// fsPromises.stat takes no AbortSignal, so the deadline is applied by racing
+// it: on a wedged filesystem the stat would otherwise hang unbounded, outside
+// the read budget it is supposed to be inside. The losing promise is settled
+// through Promise.race, so a late rejection is never unhandled.
+function abortable(promise, signal) {
+  if (!signal) {
+    return promise;
+  }
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      const abort = () => reject(new Error("aborted"));
+      if (signal.aborted) {
+        abort();
+        return;
+      }
+      signal.addEventListener("abort", abort, { once: true });
+    }),
+  ]);
+}
+
 async function readTail(filePath, maxTailBytes, signal) {
   try {
-    const { size } = await fs.stat(filePath);
+    const { size } = await abortable(fs.stat(filePath), signal);
     if (size === 0) {
       return null;
     }
@@ -727,6 +872,16 @@ function buildCheckBody(input, config = DEFAULT_CONFIG, options = {}) {
   };
 }
 
+// "Reason-less" is a question about content, not truthiness: a reason the agent
+// reads as blank is what pushes it into fabricating an answer (Step 0, §0.5
+// item 7). Covers whitespace plus the invisibles JS `\s` does not — soft
+// hyphen, zero-width space and joiners, the bidi marks, the word joiner.
+const BLANK_REASON_PATTERN = /[\s\u00ad\u200b-\u200f\u2060\ufeff]/gu;
+
+function hasReasonContent(value) {
+  return typeof value === "string" && value.replace(BLANK_REASON_PATTERN, "") !== "";
+}
+
 // Maps a PDP response to a decision outcome without performing any I/O.
 // Returns { kind: "allow" | "deny" | "error", reason }.
 function interpretDecision(data) {
@@ -738,13 +893,14 @@ function interpretDecision(data) {
     };
   }
   if (body.decision === false) {
+    // Never reason-less. A reason with content is passed through byte-exact,
+    // never trimmed — the PDP's wording is the agent's only explanation.
+    const provided = body.context?.reason;
     return {
       kind: "deny",
-      // Never reason-less: Step 0 showed a denied agent fabricates plausible
-      // answers rather than reporting the failure when given no explanation.
-      reason:
-        (typeof body.context?.reason === "string" && body.context.reason) ||
-        "Authorization denied by Denied policy engine.",
+      reason: hasReasonContent(provided)
+        ? provided
+        : "Authorization denied by Denied policy engine.",
     };
   }
   return {
@@ -778,10 +934,15 @@ function resolveFailSafe(failMode, message) {
 // The emitted object, in one place. `{}` is not an allow on this platform — it
 // denies — so a `decision` field is always present, and `reason` is included
 // whenever there is one to give.
+// The reason is capped here, at the single choke point every emission passes
+// through: it can carry an upstream body (a proxy's HTML block page) or a PDP
+// reason of any length, and an emitted object larger than the OS pipe buffer
+// blocks the write forever on a host that reads stdout only after we exit. The
+// cut keeps the head, which is the part that tells the agent why.
 function buildDecisionOutput(decision, reason) {
   const output = { decision };
-  if (typeof reason === "string" && reason) {
-    output.reason = reason;
+  if (hasReasonContent(reason)) {
+    output.reason = truncatePromptString(reason, MAX_REASON_BYTES);
   }
   return output;
 }
@@ -805,9 +966,11 @@ function warnStderr(message) {
 }
 
 // Writes the whole buffer, tolerating short writes and a non-blocking pipe.
-// Returns false if the bytes could not be delivered synchronously.
-function writeAllSync(fd, text) {
-  const buffer = Buffer.from(text, "utf-8");
+// Returns the number of bytes actually delivered: the caller owns the
+// remainder, and resending the whole text instead would put a fragment and a
+// second complete decision object on stdout — an unparseable payload, which on
+// this platform denies.
+function writeAllSync(fd, buffer) {
   let offset = 0;
   const deadline = Date.now() + FLUSH_GRACE_MS;
   while (offset < buffer.length) {
@@ -816,16 +979,20 @@ function writeAllSync(fd, text) {
     } catch (err) {
       const retryable = err && (err.code === "EAGAIN" || err.code === "EWOULDBLOCK");
       if (!retryable || Date.now() >= deadline) {
-        return false;
+        return offset;
       }
     }
   }
-  return true;
+  return offset;
 }
 
 // Emit guard. Exported accessors exist so the double-emit invariant is testable
-// without spawning a process.
+// without spawning a process. `emitted` means *delivered*, not attempted: a
+// writer that throws must leave the exit-handler net armed. `emitting` is the
+// separate re-entrancy marker, so a handler firing during the write cannot
+// start a second one.
 let emitted = false;
+let emitting = false;
 let flushPending = false;
 
 function hasEmitted() {
@@ -834,26 +1001,36 @@ function hasEmitted() {
 
 function resetEmitState() {
   emitted = false;
+  emitting = false;
   flushPending = false;
 }
 
 // Returns true when this call produced the emission, false when it was
 // suppressed because a decision had already been written.
 function emitDecision(decision, reason, writer = writeStdout) {
-  if (emitted) {
+  if (emitted || emitting) {
     return false;
   }
-  emitted = true;
-  writer(JSON.stringify(buildDecisionOutput(decision, reason)));
+  emitting = true;
+  try {
+    writer(JSON.stringify(buildDecisionOutput(decision, reason)));
+    emitted = true;
+  } finally {
+    emitting = false;
+  }
   return true;
 }
 
 function writeStdout(text) {
-  if (writeAllSync(STDOUT_FD, text)) {
+  const buffer = Buffer.from(text, "utf-8");
+  const written = writeAllSync(STDOUT_FD, buffer);
+  if (written >= buffer.length) {
     return;
   }
-  // stdout refused a synchronous write; fall back to the stream and let
-  // finishProcess() wait for the flush callback instead of exiting under it.
+  // stdout refused a synchronous write; send only what is left — resending the
+  // whole text would duplicate the part already on the wire — and let the flush
+  // callback own the exit instead of exiting under it.
+  const remainder = buffer.subarray(written);
   flushPending = true;
   const done = () => {
     flushPending = false;
@@ -864,7 +1041,7 @@ function writeStdout(text) {
     guard.unref();
   }
   try {
-    process.stdout.write(text, done);
+    process.stdout.write(remainder, done);
   } catch {
     done();
   }
@@ -953,13 +1130,47 @@ async function readStdin(
 // Main
 // ---------------------------------------------------------------------------
 
-async function main() {
-  const config = await loadRuntimeConfig();
-  activeConfig = config;
+// Bounds the inbound body. `res.json()` / `res.text()` buffer whatever the far
+// end sends, and a large enough body is an out-of-memory abort: SIGABRT is not
+// catchable by uncaughtException, so the process dies with empty stdout and the
+// host picks the outcome. Overflow is reported, never silently truncated into a
+// decision, because a cut JSON body is not the PDP's answer.
+async function readBoundedBody(res, maxBytes = MAX_RESPONSE_BYTES) {
+  const body = res.body;
+  if (!body || typeof body[Symbol.asyncIterator] !== "function") {
+    const text = await res.text();
+    const bytes = Buffer.byteLength(text, "utf-8");
+    return { text: truncateUtf8(text, maxBytes), overflow: bytes > maxBytes };
+  }
+  const chunks = [];
+  let size = 0;
+  let overflow = false;
+  for await (const chunk of body) {
+    const buffer = Buffer.from(chunk);
+    if (size + buffer.length > maxBytes) {
+      chunks.push(buffer.subarray(0, maxBytes - size));
+      overflow = true;
+      break; // breaking cancels the stream and releases the socket
+    }
+    chunks.push(buffer);
+    size += buffer.length;
+  }
+  return { text: Buffer.concat(chunks).toString("utf-8"), overflow };
+}
 
+async function main() {
+  // The two reads are independent, so they run concurrently: sequenced, a
+  // stalled config file would spend the stdin budget as well and push the
+  // decision into the watchdog. activeConfig is replaced the moment the config
+  // resolves, so the fatal handlers and the watchdog stop holding the env-only
+  // default at the earliest possible point.
+  const configPromise = loadRuntimeConfig().then((resolved) => {
+    activeConfig = resolved;
+    return resolved;
+  });
   // stdin is drained before any early exit so the host never writes into a
   // closed pipe on the missing-API-key path.
-  const input = await readStdin();
+  const [config, input] = await Promise.all([configPromise, readStdin()]);
 
   if (!config.apiKey) {
     failSafeExit(
@@ -997,7 +1208,12 @@ async function main() {
     });
 
     if (!res.ok) {
-      const error = { error: `HTTP ${res.status}: ${await res.text()}` };
+      // A corporate proxy answers a blocked request with a whole HTML page, so
+      // the body is bounded on the way in and again on the way into the reason.
+      const { text } = await readBoundedBody(res);
+      const error = {
+        error: `HTTP ${res.status}: ${truncatePromptString(text, MAX_REASON_BYTES)}`,
+      };
       await appendAuditRecord(input, body, error, config);
       failSafeExit(error.error, config);
       return;
@@ -1005,7 +1221,11 @@ async function main() {
 
     let data;
     try {
-      data = await res.json();
+      const { text, overflow } = await readBoundedBody(res);
+      if (overflow) {
+        throw new Error(`response exceeded ${MAX_RESPONSE_BYTES} bytes`);
+      }
+      data = JSON.parse(text);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await appendAuditRecord(input, body, { error: message }, config);
@@ -1045,6 +1265,20 @@ if (require.main === module) {
     );
   process.on("uncaughtException", onFatal);
   process.on("unhandledRejection", onFatal);
+  // Signal death is a normal way for this process to end — the host kills the
+  // child at its own timeout, Ctrl-C reaches the whole process group, closing
+  // the IDE sends SIGHUP — and it bypasses the exit handler below entirely,
+  // leaving empty stdout and the outcome to the host. SIGKILL and SIGSTOP
+  // cannot be caught; every other signal ends in a decision and exit 0.
+  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"]) {
+    process.on(signal, () =>
+      failSafeExit(`Received ${signal} before a decision was made.`),
+    );
+  }
+  // Node ignores SIGPIPE by default; the listener makes that explicit. There is
+  // nothing to deliver once stdout's reader is gone, so the write path fails on
+  // its own rather than the process dying mid-decision.
+  process.on("SIGPIPE", () => {});
   // Last resort: if the process somehow reaches exit without a decision, the
   // host would choose the outcome — which is the one thing never permitted.
   process.on("exit", () => {
@@ -1054,10 +1288,15 @@ if (require.main === module) {
         activeConfig.failMode,
         "Interceptor exited without a decision.",
       );
-      writeAllSync(
-        STDOUT_FD,
+      const payload = Buffer.from(
         JSON.stringify(buildDecisionOutput(outcome.decision, outcome.reason)),
+        "utf-8",
       );
+      if (writeAllSync(STDOUT_FD, payload) < payload.length) {
+        // No async fallback is possible under `exit`; say so rather than let a
+        // partial object look like a decision.
+        writeStderr("[denied-dev] Failed to flush the fail-safe decision.\n");
+      }
     }
   });
   // Deliberately not unref'd: keeping the event loop alive means the process
@@ -1079,9 +1318,13 @@ module.exports = {
   MAX_TIMEOUT_MS,
   DEFAULT_TIMEOUT_MS,
   DEFAULT_STDIN_TIMEOUT_MS,
+  DEFAULT_CONFIG_TIMEOUT_MS,
   DEFAULT_READ_TIMEOUT_MS,
   DEFAULT_TAIL_BYTES,
   DEFAULT_REDACT_KEYS,
+  MAX_REDACT_STRING_BYTES,
+  MAX_REASON_BYTES,
+  MAX_RESPONSE_BYTES,
   FAIL_MODES,
   resolveConfigPath,
   loadFileConfig,
@@ -1108,10 +1351,12 @@ module.exports = {
   interpretDecision,
   resolveFailSafe,
   buildDecisionOutput,
+  hasReasonContent,
   extractLastUserPrompt,
   readLastUserPrompt,
   appendAuditRecord,
   readStdin,
+  readBoundedBody,
   emitDecision,
   hasEmitted,
   resetEmitState,
