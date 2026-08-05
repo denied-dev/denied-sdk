@@ -627,21 +627,28 @@ test("--check passes when the gate is installed and the PDP answers", async () =
   assert.match(output, /\[PASS\] hook file \(global\)/);
   assert.match(output, /\[PASS\] interceptor staged/);
   assert.match(output, /\[PASS\] node on PATH/);
+  assert.match(output, /\[PASS\] API key configured/);
   assert.match(output, /\[PASS\] PDP reachable/);
+  assert.match(output, /\[PASS\] PDP accepts checks/);
   assert.match(output, /cannot prove a running Kiro IDE has loaded it/);
+  assert.ok(!/\[FAIL\]/.test(output), output);
 });
 
-test("--check treats an HTTP error response as reachable but a transport error as not", async () => {
+test("--check separates transport reachability from a usable PDP response", async () => {
   const sandbox = makeSandbox();
   await runInstaller(sandbox);
 
-  const unauthorized = await runInstaller(sandbox, ["--check"], {
-    env: { DENIED_API_KEY: "bad", PATH: process.env.PATH },
-    fetch: async () => ({ status: 401 }),
+  // A 404 proves the transport works, but the interceptor treats any non-2xx as
+  // an error and fails open - a wrong URL must not be certified as working.
+  const notFound = await runInstaller(sandbox, ["--check"], {
+    env: { DENIED_API_KEY: "dn", PATH: process.env.PATH },
+    fetch: async () => ({ status: 404 }),
   });
-  assert.equal(unauthorized.code, 0);
-  assert.match(unauthorized.output, /\[PASS\] PDP reachable: .*HTTP 401/);
-  assert.match(unauthorized.output, /rejected the credentials/);
+  assert.equal(notFound.code, 1, notFound.output);
+  assert.match(notFound.output, /\[PASS\] PDP reachable: .*HTTP 404/);
+  assert.match(notFound.output, /\[FAIL\] PDP accepts checks: HTTP 404/);
+  assert.match(notFound.output, /is this URL a Denied PDP\?/);
+  assert.match(notFound.output, /NOT enforcing/);
 
   const offline = await runInstaller(sandbox, ["--check"], {
     env: { DENIED_API_KEY: "dn", PATH: process.env.PATH },
@@ -652,6 +659,117 @@ test("--check treats an HTTP error response as reachable but a transport error a
   assert.equal(offline.code, 1);
   assert.match(offline.output, /\[FAIL\] PDP reachable/);
   assert.match(offline.output, /NOT enforcing/);
+  assert.ok(
+    !/PDP accepts checks/.test(offline.output),
+    "an unreachable PDP is one failure, not two",
+  );
+});
+
+test("--check fails a hook entry wired to the wrong trigger or matcher", async () => {
+  const rewire = async (mutate) => {
+    const sandbox = makeSandbox();
+    await runInstaller(sandbox);
+    const hookPath = globalHookPath(sandbox);
+    const hook = readJson(hookPath);
+    mutate(hook.hooks[0]);
+    fs.writeFileSync(hookPath, serializeHookFile(hook));
+    return runInstaller(sandbox, ["--check"], {
+      env: { DENIED_API_KEY: "dn_test", PATH: process.env.PATH },
+      fetch: async () => ({ status: 200 }),
+    });
+  };
+
+  const wrongTrigger = await rewire((entry) => {
+    entry.trigger = "PostToolUse";
+  });
+  assert.equal(wrongTrigger.code, 1, wrongTrigger.output);
+  assert.match(wrongTrigger.output, /\[FAIL\] hook file \(global\)/);
+  assert.match(wrongTrigger.output, /mis-wired and will not gate tool calls/);
+  assert.match(wrongTrigger.output, /trigger="PostToolUse" - expected "PreToolUse"/);
+  assert.match(wrongTrigger.output, /NOT enforcing/);
+
+  const wrongMatcher = await rewire((entry) => {
+    entry.matcher = "execute_bash";
+  });
+  assert.equal(wrongMatcher.code, 1, wrongMatcher.output);
+  assert.match(wrongMatcher.output, /matcher="execute_bash" - expected "\.\*"/);
+  assert.match(wrongMatcher.output, /NOT enforcing/);
+});
+
+test("--check fails a hook entry whose command does not run the staged interceptor", async () => {
+  const sandbox = makeSandbox();
+  await runInstaller(sandbox);
+  const hookPath = globalHookPath(sandbox);
+  const hook = readJson(hookPath);
+  hook.hooks[0].action.command = 'node "/somewhere/else/interceptor.js"';
+  fs.writeFileSync(hookPath, serializeHookFile(hook));
+
+  const { code, output } = await runInstaller(sandbox, ["--check"], {
+    env: { DENIED_API_KEY: "dn_test", PATH: process.env.PATH },
+    fetch: async () => ({ status: 200 }),
+  });
+  assert.equal(code, 1, output);
+  assert.match(output, /\[FAIL\] hook file \(global\)/);
+  assert.match(output, /command does not reference .*\.denied[/\\]kiro[/\\]interceptor\.js/);
+  assert.match(output, /NOT enforcing/);
+});
+
+test("--check fails when no API key is configured", async () => {
+  const sandbox = makeSandbox();
+  await runInstaller(sandbox);
+
+  const { code, output } = await runInstaller(sandbox, ["--check"], {
+    env: { PATH: process.env.PATH },
+    fetch: async () => ({ status: 200 }),
+  });
+  assert.equal(code, 1);
+  assert.match(output, /\[FAIL\] API key configured/);
+  assert.match(output, /DENIED_API_KEY/);
+  assert.match(output, /\.denied[/\\]config\.json/);
+  assert.match(output, /fails open/);
+  assert.match(output, /NOT enforcing/);
+
+  // The PDP will reject the unauthenticated probe; that message must point at
+  // the missing key rather than accuse the user of configuring a bad one.
+  const rejected = await runInstaller(sandbox, ["--check"], {
+    env: { PATH: process.env.PATH },
+    fetch: async () => ({ status: 401 }),
+  });
+  assert.equal(rejected.code, 1);
+  assert.match(rejected.output, /rejects unauthenticated checks/);
+  assert.ok(!/rejected the configured API key/.test(rejected.output));
+});
+
+test("--check fails when the PDP rejects the credentials", async () => {
+  const sandbox = makeSandbox();
+  await runInstaller(sandbox);
+
+  for (const status of [401, 403]) {
+    const { code, output } = await runInstaller(sandbox, ["--check"], {
+      env: { DENIED_API_KEY: "dn_bad", PATH: process.env.PATH },
+      fetch: async () => ({ status }),
+    });
+    assert.equal(code, 1, output);
+    assert.match(output, /\[PASS\] PDP reachable/);
+    assert.match(output, new RegExp(`\\[FAIL\\] PDP accepts checks: HTTP ${status}`));
+    assert.match(output, /rejected the configured API key/);
+    assert.match(output, /NOT enforcing/);
+  }
+});
+
+test("--check fails when the PDP returns a server error", async () => {
+  const sandbox = makeSandbox();
+  await runInstaller(sandbox);
+
+  const { code, output } = await runInstaller(sandbox, ["--check"], {
+    env: { DENIED_API_KEY: "dn_test", PATH: process.env.PATH },
+    fetch: async () => ({ status: 503 }),
+  });
+  assert.equal(code, 1, output);
+  assert.match(output, /\[PASS\] PDP reachable/);
+  assert.match(output, /\[FAIL\] PDP accepts checks: HTTP 503/);
+  assert.match(output, /fail-open until it recovers/);
+  assert.match(output, /NOT enforcing/);
 });
 
 test("--check fails when nothing is installed and reports legacy hook files", async () => {

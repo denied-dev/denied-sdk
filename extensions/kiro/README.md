@@ -50,6 +50,8 @@ Kiro CLI V3 has no such issue: it picks the hook up on the next `kiro-cli --v3` 
 node extensions/kiro/install.js --check
 ```
 
+Each prerequisite is reported as `[PASS]` or `[FAIL]`, and the command exits non-zero if any of them would leave the gate failing open — a mis-wired hook entry, a missing API key, credentials the PDP rejects, or a PDP that is down.
+
 When a tool call is blocked, the reason is written to stderr:
 
 ```
@@ -156,7 +158,7 @@ Example `~/.denied/config.json`:
 }
 ```
 
-**Redaction is on by default here, unlike our other extensions.** Kiro's `fs_write` carries whole file bodies in `tool_input` and `execute_bash` carries full command lines, so a `.env` write or a `curl -H "Authorization: ..."` would otherwise be shipped verbatim. Redaction runs before truncation, so a secret cannot survive inside a truncated preview.
+**Redaction is enabled by default and is key-based.** Kiro's `tool_input` is unusually rich: `fs_write` carries whole file bodies and `execute_bash` carries full command lines. Values whose JSON keys match configured secret-like names (such as `authorization`, `api_key`, `password`, or `token`) are replaced with `[REDACTED]` before truncation. Redaction does not inspect arbitrary string contents, so secrets embedded in shell commands, file bodies, URLs, or other free-form text are still sent to the PDP verbatim. When tool inputs must not leave the machine, set both `request.includeToolInput` and `request.includeHookPayload` to `false` in `~/.denied/config.json`.
 
 > **Security note:** Audit logs may contain sensitive data. When `audit.enabled` is true, `audit.includeRawPayload`, `audit.includeMappedRequest`, `request.includeToolInput`, and `request.includeHookPayload` default to `true`, so audit records can include full tool inputs, hook payloads, file contents, shell commands, URLs, and credentials. Store audit logs only in a location with appropriate access controls.
 
@@ -202,12 +204,14 @@ node extensions/kiro/install.js [--workspace=<path>] [--dry-run] [--check] [--un
 | _(none)_             | Install: stage the interceptor, write `~/.kiro/hooks/denied.json`, record a manifest.    |
 | `--workspace=<path>` | Also register the hook in `<path>/.kiro/hooks/denied.json`.                              |
 | `--dry-run`          | Print the plan and write nothing. Combines with `--uninstall`.                           |
-| `--check`            | Verify the gate is registered and every prerequisite is in place.                        |
+| `--check`            | Verify the gate can actually enforce. Exits non-zero if anything would fail open.        |
 | `--uninstall`        | Remove the gate. Never touches `~/.denied/config.json`.                                  |
 
 Everything the installer writes is recorded in `~/.denied/kiro/install-manifest.json`, which is what makes `--uninstall` exact and what lets a re-run notice you hand-edited a managed file. If `~/.kiro/hooks/denied.json` already holds hooks of your own, they are preserved and the file is backed up before it is rewritten; if it cannot be parsed, the install refuses and writes nothing.
 
-> **`--check` performs a real authorization check.** It POSTs to your PDP with subject and resource id `denied-install-check` to prove reachability, so the probe will appear in your Denied decision logs. Note also what `--check` cannot tell you: it verifies that the hook is registered on disk, not that a currently running Kiro IDE has loaded it.
+> **`--check` performs a real authorization check.** It POSTs to your PDP with subject and resource id `denied-install-check`, so the probe will appear in your Denied decision logs. Note also what `--check` cannot tell you: it verifies that the hook is registered on disk, not that a currently running Kiro IDE has loaded it.
+
+`--check` prints one `[PASS]`/`[FAIL]` line per condition and exits `1` if any of them failed, because a condition that leaves the gate failing open is not a warning. It fails on: a missing, disabled or mis-wired hook entry (wrong `trigger`, wrong `matcher`, or a `command` that does not run the staged interceptor); a missing staged interceptor; no Node 18+ on `PATH`; no API key in `DENIED_API_KEY` or `~/.denied/config.json`; an unreachable PDP; and **any non-2xx response** from `<url>/pdp/check` — rejected credentials (`401`/`403`), a server error (`5xx`), or anything else, such as the `404` you get when `DENIED_URL` does not point at a Denied PDP. The interceptor treats every non-2xx as an error and resolves it through `failMode`, so only a `2xx` proves the gate can get a decision. Only an all-`[PASS]` run reports that the gate is in place.
 
 ## Known limitations
 
@@ -217,6 +221,7 @@ Stated plainly, because a security control that overstates its coverage is worse
 - **The hook file is user-removable.** Kiro has no admin-enforced hook tier ([#7557](https://github.com/kirodotdev/Kiro/issues/7557)), so anyone who can write `~/.kiro/hooks/` can delete the gate. This is a guardrail for a cooperating user or organization, not an adversarial-insider control. Keeping Kiro's default deny on writes to `.kiro/hooks/**` gives partial tamper-resistance.
 - **Windows CLI blocking is reported broken.** Exit 2 does not block on Windows 11 ([#8264](https://github.com/kirodotdev/Kiro/issues/8264)). Treat Windows as unverified: the hook runs, but do not assume it enforces.
 - **Denying inside a multi-tool turn was reported to crash sessions** with a `ValidationException` ([#6342](https://github.com/kirodotdev/Kiro/issues/6342), still open upstream). This did not reproduce in our testing: on Kiro CLI 2.16.0 (V3), a three-call turn with every call denied survived cleanly and the session stayed usable. If you hit it on an older build, no client-side fix exists.
+- **`KIRO_HOME` does not relocate hooks.** Verified on Kiro CLI 2.16.1 (V3): hooks are read from `~/.kiro/hooks` unconditionally, so the installer writing there is correct today and a custom `KIRO_HOME` gains you nothing. Revisit if [#9148](https://github.com/kirodotdev/Kiro/issues/9148) or [#9075](https://github.com/kirodotdev/Kiro/issues/9075) is fixed upstream.
 - **Decision caching is deliberately disabled** (`cache_ttl_seconds` stays `0`). Kiro's hook cache key does not include `tool_input`, so `git status` and `rm -rf /` are the same cache entry — and any TTL would delay a policy change or a revoked key by that long. The PDP call is one HTTPS round trip on a path already waiting on an LLM.
 
 ## Troubleshooting

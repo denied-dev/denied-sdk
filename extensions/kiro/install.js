@@ -661,15 +661,28 @@ async function runCheck(ctx) {
       record(false, `hook file (${hookFile.scope})`, `"${HOOK_NAME}" is present but disabled`);
       continue;
     }
-    record(true, `hook file (${hookFile.scope})`, `${HOOK_NAME} registered in ${hookFile.path}`);
-    if (entry.trigger !== "PreToolUse" || entry.matcher !== ".*") {
-      ctx.out(
-        `           NOTE: trigger=${JSON.stringify(entry.trigger)} matcher=${JSON.stringify(entry.matcher)} - expected "PreToolUse" / ".*"`,
-      );
+    // Registration alone is not enforcement: an entry with the wrong trigger,
+    // the wrong matcher or a command pointing somewhere else is a hook that
+    // never gates a tool call, so it must fail rather than warn.
+    const wiring = [];
+    if (entry.trigger !== "PreToolUse") {
+      wiring.push(`trigger=${JSON.stringify(entry.trigger)} - expected "PreToolUse"`);
+    }
+    if (entry.matcher !== ".*") {
+      wiring.push(`matcher=${JSON.stringify(entry.matcher)} - expected ".*"`);
     }
     if (!String(entry.action?.command ?? "").includes(paths.interceptorTarget)) {
-      ctx.out(`           NOTE: command does not reference ${paths.interceptorTarget}`);
+      wiring.push(`command does not reference ${paths.interceptorTarget}`);
     }
+    if (wiring.length > 0) {
+      record(
+        false,
+        `hook file (${hookFile.scope})`,
+        `"${HOOK_NAME}" in ${hookFile.path} is mis-wired and will not gate tool calls (${wiring.join("; ")})`,
+      );
+      continue;
+    }
+    record(true, `hook file (${hookFile.scope})`, `${HOOK_NAME} registered in ${hookFile.path}`);
   }
 
   const staged = readTextOrNull(paths.interceptorTarget);
@@ -686,21 +699,51 @@ async function runCheck(ctx) {
     node.ok ? `${node.version}` : (node.error ?? `${node.version} is below ${MIN_NODE_MAJOR}`),
   );
 
+  // A missing key is not advisory: the PDP rejects unauthenticated checks, so
+  // the interceptor would fail open on every single tool call.
   const { url, apiKey } = resolveServerUrl(ctx.env, paths.configPath);
-  if (!apiKey) {
-    ctx.out(`  [WARN] no API key: set DENIED_API_KEY or add "apiKey" to ${paths.configPath}`);
-  }
+  record(
+    Boolean(apiKey),
+    "API key configured",
+    apiKey
+      ? `from ${ctx.env.DENIED_API_KEY ? "DENIED_API_KEY" : paths.configPath}`
+      : `set DENIED_API_KEY or add "apiKey" to ${paths.configPath} - without a key every tool call fails open`,
+  );
+
+  // Two distinct questions: did anything answer (transport), and did it accept
+  // the check (credentials + server health). Only the second proves the gate
+  // can actually get a decision - the interceptor treats *every* non-2xx as an
+  // error and resolves it through failMode, so only a 2xx may pass here.
   const probe = await probePdp(ctx, url, apiKey);
   record(
     probe.ok,
     "PDP reachable",
     probe.ok ? `${url} responded HTTP ${probe.status}` : `${url}: ${probe.detail}`,
   );
-  if (probe.ok && (probe.status === 401 || probe.status === 403)) {
-    ctx.out("           NOTE: the PDP answered but rejected the credentials - check your API key.");
-  }
-  if (probe.ok && probe.status >= 500) {
-    ctx.out("           NOTE: the PDP answered with a server error - checks may fail-open until it recovers.");
+  if (probe.ok) {
+    if (probe.status === 401 || probe.status === 403) {
+      record(
+        false,
+        "PDP accepts checks",
+        apiKey
+          ? `HTTP ${probe.status} - the PDP rejected the configured API key; checks fail open until it is fixed`
+          : `HTTP ${probe.status} - the PDP rejects unauthenticated checks; configure an API key (see above)`,
+      );
+    } else if (probe.status >= 500) {
+      record(
+        false,
+        "PDP accepts checks",
+        `HTTP ${probe.status} - the PDP is returning a server error; checks fail-open until it recovers`,
+      );
+    } else if (probe.status >= 200 && probe.status < 300) {
+      record(true, "PDP accepts checks", `HTTP ${probe.status} from ${url}/pdp/check`);
+    } else {
+      record(
+        false,
+        "PDP accepts checks",
+        `HTTP ${probe.status} - unexpected response from ${url}/pdp/check; the interceptor treats any non-2xx as an error, so checks fail open - is this URL a Denied PDP?`,
+      );
+    }
   }
 
   const legacyDirs = new Set(paths.hookFiles.map((hookFile) => path.dirname(hookFile.path)));
