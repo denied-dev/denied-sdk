@@ -236,7 +236,7 @@ Stated plainly, because a security control that overstates its coverage is worse
 - **The GUI surfaces are not enforced.** Antigravity IDE 2.1.1 and Antigravity 2.0 desktop 2.5.0 execute no hooks at all. A detective (audit-only) layer over the session transcript is a future milestone; today there is no preventive control there.
 - **Denied agents may fabricate results.** After several denials in one turn, the CLI agent has been observed to stop retrying and *invent plausible answers* — reporting a `pwd` and a `whoami` value it never obtained, inferred from session context. This is why every deny carries a `reason` (a reason-less denial makes it worse). Treat a confident answer that follows a denial with suspicion, and check the decision log.
 - **Subagents are distinct subjects.** A subagent's tool calls arrive under its own new `conversationId` with **no parent id in the payload** (parentage is only inferable from a later `send_message.Recipient`). A policy keyed to one conversation does not automatically extend to its subagents. The subagent's own internal tool calls *are* individually hooked — verified — so a subagent is not a route around policy.
-- **A deny on subagent *dispatch* may be ignored** ([#640](https://github.com/google-antigravity/antigravity-cli/issues/640), open). Gate what a subagent *does*, not the spawn.
+- **A deny on subagent *dispatch* may be ignored** ([#640](https://github.com/google-antigravity/antigravity-cli/issues/640), open). Gate what a subagent *does*, not the spawn. A live deny-mode run confirms this is sufficient: with `run_command` denied, an `invoke_subagent` dispatch was allowed through, the subagent's own `run_command` was blocked under its own `conversationId`, and the command never executed.
 - **Windows is unsupported.** Hook execution is broken upstream ([#222](https://github.com/google-antigravity/antigravity-cli/issues/222), [#257](https://github.com/google-antigravity/antigravity-cli/issues/257), [#49](https://github.com/google-antigravity/antigravity-cli/issues/49)). The installer refuses to run.
 - **Glob-style enumeration is not gateable by tool name.** Pattern-matching requests compile down to `run_command` on some surfaces, so enumeration control requires inspecting the shell string server-side.
 - **The hook file is user-removable.** Anyone who can write `~/.gemini/config/hooks.json` can delete the gate. This is a guardrail for a cooperating user or organization, not an adversarial-insider control.
@@ -273,6 +273,17 @@ Revisit triggers — check these each planning cycle:
 | `HTTP 401` or `403`                               | Invalid or missing API key                     | Check `apiKey` in `~/.denied/config.json` or the `DENIED_API_KEY` env var.                                                  |
 | `timeoutMs ... exceeds the ... watchdog budget`   | Configured timeout too large                   | Informational — it was clamped. Lower `timeoutMs` to 5000 or less to silence it.                                            |
 | `Watchdog fired after 8000ms`                     | Something stalled                              | The configured `failMode` decision was emitted. Check PDP reachability and filesystem responsiveness.                       |
+| Tool calls succeed but no decisions appear in the log | A stale `DENIED_*` env var is overriding your config file | Run `env \| grep DENIED_`. Environment variables beat `~/.denied/config.json` by design, so a leftover `export DENIED_URL=...` sends every check to the wrong address; under the default `failMode: open` the gate then allows everything while looking installed. Unset it, or launch `agy` from a clean shell. |
+
+### If `failMode: closed` locks you out
+
+`~/.denied/config.json` is shared by **every** Denied extension on the machine — the Antigravity hook, the Claude Code hook, Codex, Kiro. With `failMode: closed`, an unreachable PDP correctly denies *every* tool call in *every* gated agent, including the tools you would use to fix it. Recover from a plain shell:
+
+```bash
+rm ~/.denied/config.json          # or edit it back to "failMode": "open"
+```
+
+This is the gate working as designed, not a bug — but it is worth knowing before you set `closed`. When testing a policy against a throwaway PDP, point only the process under test at it with `DENIED_CONFIG=/path/to/test-config.json` instead of editing the global file.
 
 ## Uninstalling
 
