@@ -11,6 +11,7 @@ This is a monorepo containing SDK implementations for the Denied authorization p
 - **OpenClaw extension** (`/extensions/openclaw`): OpenClaw plugin that enforces authorization on every tool call
 - **Claude Code extension** (`/extensions/claude-code`): Claude Code hook plugin that enforces authorization on every tool call
 - **Hermes extension** (`/extensions/hermes`): Hermes Agent Python plugin that enforces authorization before tool calls
+- **Kiro extension** (`/extensions/kiro`): Kiro IDE and Kiro CLI V3 hook that enforces authorization on every tool call, plus its installer script
 
 Both SDKs provide identical functionality for interacting with a Denied authorization server following the Authzen Authorization API 1.0 specification to check permissions for subjects performing actions on resources.
 
@@ -118,6 +119,23 @@ uv run --package denied-hermes-plugin ruff format --check extensions/hermes
 
 # Type-check Hermes plugin code and tests
 uv run --package denied-hermes-plugin pyright extensions/hermes/src/denied_hermes extensions/hermes/tests
+```
+
+### Kiro Extension (`/extensions/kiro`)
+
+The Kiro extension is a zero-dependency Node.js hook plus an installer script. Tests use Node's built-in runner, so there is nothing to install first:
+
+```bash
+# Run Kiro extension tests
+node --test extensions/kiro/hooks/interceptor.test.js extensions/kiro/install.test.js
+
+# Install the gate for Kiro IDE and Kiro CLI V3
+node extensions/kiro/install.js
+
+# Preview the plan, verify the install, remove it
+node extensions/kiro/install.js --dry-run
+node extensions/kiro/install.js --check
+node extensions/kiro/install.js --uninstall
 ```
 
 ### Pre-commit Hooks
@@ -326,6 +344,16 @@ denied-sdk/
     │   ├── tests/                 # Pytest coverage
     │   └── README.md              # Plugin documentation
     │
+    ├── kiro/
+    │   ├── hooks/
+    │   │   ├── interceptor.js      # PreToolUse authorization interceptor (zero deps)
+    │   │   └── interceptor.test.js # Interceptor unit tests (node --test)
+    │   ├── templates/
+    │   │   └── hook-v1.json        # v1 hook file template (Kiro IDE + CLI V3)
+    │   ├── install.js              # Installer (--workspace/--dry-run/--check/--uninstall)
+    │   ├── install.test.js         # Installer unit tests (node --test)
+    │   └── README.md               # Plugin documentation
+    │
     └── openclaw/
         ├── src/
         │   ├── handler.ts       # before_tool_call hook implementation
@@ -387,6 +415,39 @@ Configuration resolves per-setting in the order: environment variable → JSON c
 `hooks/hooks.json` resolves the interceptor path via `${PLUGIN_ROOT}` (Codex's canonical env var for installed plugin roots). Codex requires the user to review and trust the hook definition via the `/hooks` command before it will execute on first run.
 
 The Codex marketplace manifest lives at the repo root in `.agents/plugins/marketplace.json` (Codex's preferred path; differs in schema from Claude's `.claude-plugin/marketplace.json` — the two coexist).
+
+### Kiro Extension Design
+
+The plugin (`extensions/kiro`) enforces Denied authorization on **Kiro IDE** and **Kiro CLI V3** (`kiro-cli --v3`) via Kiro's native `PreToolUse` hook. It is a zero-dependency Node.js script (Node 18+) that reuses the Codex interceptor pattern. **Kiro CLI V2 (plain `kiro-cli chat`) is deliberately not supported** — see the compatibility note below.
+
+**One interceptor, one file, two surfaces.** Kiro IDE and CLI V3 share a hook schema, a hooks directory, a tool vocabulary and `tool_input` shapes, so a single `~/.kiro/hooks/denied.json` registers both, and V3 honours the global file for the default agent with no flags. The v1 schema is an object containing a **`hooks` array** (not a flat hook object) with `trigger: "PreToolUse"`, a regex `matcher: ".*"`, and `timeout: 20` in **seconds** — set above the interceptor's own 15s PDP deadline so the interceptor, not the host, decides the outcome. The legacy `.kiro/hooks/<name>.kiro.hook` (`when`/`then`) format does not fire on current builds: the installer writes v1 only, and the uninstaller still recognises legacy files.
+
+For each tool call:
+
+1. Kiro streams the hook context as JSON on stdin (`hook_event_name`, `cwd`, `session_id`, `tool_name`, `tool_input`). Every field is treated as optional — `parseHookPayload` degrades an unusable payload to `{}` and the check still goes out, with `context.payload_fidelity` (`full` / `tool_name_only` / `none`) telling the PDP how much of the request was actually visible. `readStdin` carries its own 2s deadline because some builds deliver no stdin at all. There is **no transcript or last-user-prompt enrichment** in this extension, and correspondingly no `request.includeLastUserPrompt` setting.
+2. The interceptor builds an AuthZEN evaluation request with subject `kiro/<session_id>`, action `execute`, and resource `tool/<tool_name>`. The subject `type` is `kiro` (vs. `codex`, `claude-code`) so policies can distinguish agents, and `subject.properties` carries `cwd`, `surface` and `session_id_source`. The resource id is the tool name exactly as Kiro sent it; the normalized form travels alongside it as `tool_name_canonical` so policies can match on either.
+3. Subject id resolution is a three-tier fallback: `session_id` → a stable per-process id `kiro-<first 12 hex of sha256("<ppid>:<cwd>")>` → `"unknown"`. The second tier must be stable across every tool call of one Kiro process, or log correlation is destroyed; `session_id_source` (`session_id` / `process` / `none`) records which tier produced the id so a degraded identity reads as degraded.
+4. It POSTs to the Denied PDP (`/pdp/check`) with the API key in the `X-API-Key` header; `decision: false` blocks the tool call and the reason is returned to the agent.
+5. The hook matches all tools (`".*"`). Kiro matchers are regexes over the tool *name* and cannot inspect argument values, so all policy evaluation happens server-side.
+
+**Exit-code contract — the critical Kiro-specific invariant.** The exit code is the entire protocol: `0` allows, `2` blocks on every surface. Any *other* non-zero code blocks in the IDE but only warns in the CLI, so an uncaught Node exception (exit 1) would silently produce fail-closed behaviour in the IDE and fail-open behaviour in the CLI, overriding the configured `failMode` in opposite directions. Every terminal path therefore routes through `exitWith()`, whose code comes from `resolveExitCode()` — only an explicit allow yields 0 and only an explicit deny yields 2; every other outcome (PDP error, malformed response, missing API key, unreadable stdin, watchdog expiry, uncaught exception) resolves through `failMode`. `uncaughtException`/`unhandledRejection` handlers and an 18s self-watchdog (below the hook file's 20s host timeout) close the remaining paths. **stdout is empty on every path** — all surfaces inject hook stdout into the agent's context — so diagnostics and deny reasons go to stderr.
+
+Configuration resolves per-setting in the order **environment variable → JSON config file → built-in default**, at `~/.denied/config.json` (override with `DENIED_CONFIG`) with keys `apiKey`, `url`, `failMode`, `timeoutMs`, plus `request`, `redaction` and `audit` blocks. Only the connection/runtime values have environment overrides: `DENIED_API_KEY`, `DENIED_URL`, `DENIED_FAIL_MODE`, `DENIED_TIMEOUT_MS` (plus `DENIED_CONFIG` for the file path itself). The file is the primary mechanism here rather than a convenience: Kiro documents an `env` key for `mcpServers` but nothing equivalent for hooks, and reaching IDE hooks with an environment variable means `launchctl setenv` plus a restart. The config path is resolved from `os.homedir()` and never from `process.cwd()`, because hook cwd is unreliable in multi-root workspaces. Redaction is **on by default** for Kiro (unlike Codex), because `fs_write` ships whole file bodies and `execute_bash` ships full command lines; it runs *before* truncation so a redacted value cannot resurface inside a bounded preview. It is **key-based only**: values under secret-like *keys* are replaced, and secrets embedded in free-form strings (shell commands, file bodies, URLs) still reach the PDP verbatim — the only way to keep tool inputs on the machine is `request.includeToolInput: false` plus `request.includeHookPayload: false`. Audit records go to `~/.denied/audit/denied-kiro-hook.jsonl`.
+
+`--surface=cli-v2` is the interceptor's only argument: the payload cannot identify the surface, and the flag exists solely to select CLI V2 tool-name normalization (`read`/`write`/`shell` → `read_file`/`fs_write`/`execute_bash`) for a hand-wired, unsupported V2 hook. On the supported surfaces normalization is the identity, and MCP `@server/tool` names always pass through intact.
+
+Decision caching is deliberately disabled: `cache_ttl_seconds` stays at `0`. Its cache key does not include `tool_input`, so it would conflate distinct authorization questions and delay policy revocation.
+
+Kiro has **no plugin or marketplace mechanism** ([#8578](https://github.com/kirodotdev/Kiro/issues/8578)) and Powers cannot carry hooks ([#9007](https://github.com/kirodotdev/Kiro/issues/9007)), so `extensions/kiro/install.js` stages the interceptor to `~/.denied/kiro/interceptor.js`, writes the single hook file with an absolute command path, and supports `--workspace=<path>`, `--dry-run`, `--check` and `--uninstall`. Every file it writes is recorded in `~/.denied/kiro/install-manifest.json`, which is what makes `--uninstall` exact and lets a re-run notice a hand-edited managed file. It preflights for Node 18+ and refuses to install without it (Kiro is a native binary and ships no Node runtime), merges into an existing hook file rather than clobbering it — refusing outright when it cannot parse one — and warns whenever `kiro-cli` is on PATH that V2 sessions are not enforced. `--check` sends a real probe check to the PDP (subject and resource id `denied-install-check`), so it appears in decision logs; it verifies registration on disk, not that a running IDE has loaded the hook. **`--check` records a `[PASS]`/`[FAIL]` per condition and exits 1 on any failure — it never downgrades a fail-open condition to a warning**, because a verification tool that certifies "every prerequisite is in place" while the gate is silently allowing everything is worse than no tool. It fails on: a missing, disabled or mis-wired hook entry (wrong `trigger`, wrong `matcher`, or a `command` not pointing at the staged interceptor), a missing staged interceptor, no Node 18+ on PATH, no API key, an unreachable PDP, and any non-2xx response from `/pdp/check` — 401/403 (rejected credentials), 5xx (server error), or anything else such as a 404 from a `url` that is not a Denied PDP. Reachability ("PDP reachable", proven by *any* HTTP response) and usability ("PDP accepts checks", **2xx only**) are separate results, because the interceptor treats every non-2xx as an error and resolves it through `failMode`. Planning and merge logic is pure and unit-tested, with homedir/cwd/fetch injected so the suite runs against temp directories.
+
+**Compatibility and known gaps** — stated plainly in the README rather than in footnotes:
+
+- **Kiro IDE does not hot-load hooks.** A hook file written while the IDE is running registers nothing and looks exactly like a broken hook. A full restart is mandatory, and it is the first thing to check when a user reports the gate not firing.
+- **Kiro CLI V2 is not enforced.** V3 is still early access, so plain `kiro-cli chat` runs V2 and bypasses the gate. The installer warns; the interceptor still normalizes V2 tool names so a hand-wired V2 hook fails loudly rather than silently missing policy.
+- **Glob/enumeration is not gateable by tool name.** IDE and CLI V3 compile pattern-matching into `execute_bash` running `find`; only V2 has a real `glob` tool. Enumeration control requires shell-string inspection server-side.
+- **The hook file is user-removable.** Kiro has no admin-enforced hook tier ([#7557](https://github.com/kirodotdev/Kiro/issues/7557)). This is a guardrail for a cooperating user or org, not an adversarial-insider control.
+- **`KIRO_HOME` does not relocate hooks.** Verified on Kiro CLI 2.16.1 (V3): hooks are read from `~/.kiro/hooks` unconditionally, so the installer writing there is correct. Revisit if [#9148](https://github.com/kirodotdev/Kiro/issues/9148) or [#9075](https://github.com/kirodotdev/Kiro/issues/9075) lands upstream.
+- **Platform caveats:** exit-2 blocking is reported broken on Windows ([#8264](https://github.com/kirodotdev/Kiro/issues/8264)), and blocking one tool of a multi-tool turn was reported to crash sessions with a `ValidationException` ([#6342](https://github.com/kirodotdev/Kiro/issues/6342) — did not reproduce on Kiro CLI 2.16.0: a turn with every call denied survived cleanly; the issue remains open upstream).
 
 ### Hermes Extension Design
 
@@ -474,6 +535,12 @@ Tests inject a fake Denied client and run entirely in process. Keep tests isolat
 - No build step — plain JavaScript executed directly by Claude Code's hook runner
 - No versioned package; installed as a Claude Code plugin via `claude plugin install`
 - Configuration is via environment variables (no package config)
+
+**Kiro extension**:
+
+- No build step — plain JavaScript executed directly by Kiro's hook runner
+- No package and no marketplace; installed from a clone with `node extensions/kiro/install.js`, which stages the interceptor to `~/.denied/kiro/` and registers `~/.kiro/hooks/denied.json`
+- Configuration lives in `~/.denied/config.json` (Kiro cannot set environment variables for hooks)
 
 ## Error Handling
 

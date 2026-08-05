@@ -108,3 +108,27 @@ jobs:
 
       - name: Build (sdk)
         run: pnpm run --filter sdk build
+
+  node-extensions:
+    name: Extensions - Node Tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["18", "20", "22"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Run extension tests
+        run: >-
+          node --test
+          extensions/claude-code/hooks/interceptor.test.js
+          extensions/codex/hooks/interceptor.test.js
+          extensions/kiro/hooks/interceptor.test.js
+          extensions/kiro/install.test.js
