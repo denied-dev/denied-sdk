@@ -1,0 +1,16 @@
+{
+  "denied-authz": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/DENIED-PLACEHOLDER-run-install.sh/node /DENIED-PLACEHOLDER/.denied/antigravity/interceptor.js",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
