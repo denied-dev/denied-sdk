@@ -26,27 +26,61 @@ const DEFAULT_TAIL_BYTES = 65_536; // 64 KB tail window for the transcript read
 
 // Timeout budget. The hook file registers `timeout: 10` (seconds) with the host,
 // so the watchdog must fire first, and the inner deadlines must fit inside the
-// watchdog: max(stdin, config) + fetch + transcript < watchdog < host timeout.
-// The config read and the stdin read are independent and run concurrently, so
-// only the larger of the two spends budget — and DEFAULT_CONFIG_TIMEOUT_MS must
-// stay <= DEFAULT_STDIN_TIMEOUT_MS or the fetch budget below shrinks.
-const WATCHDOG_MS = 8_000;
+// watchdog: max(stdin, config) + fetch + transcript + slack < watchdog < host
+// timeout. The config read and the stdin read are independent and run
+// concurrently, so only the larger of the two spends budget — and
+// DEFAULT_CONFIG_TIMEOUT_MS must stay <= DEFAULT_STDIN_TIMEOUT_MS or the fetch
+// budget below shrinks.
+//
+// MAX_TIMEOUT_MS is the ceiling a *configured* timeoutMs is clamped to, and at
+// that ceiling the deadlines exactly fill the watchdog. The default budget must
+// not: JSON parsing, redaction, the two stringify passes, the audit write and
+// the response drain all happen outside every deadline, so the default fetch
+// timeout is derived by subtracting BUDGET_SLACK_MS from the ceiling. Without
+// it a PDP answering just inside its deadline loses the race to the watchdog
+// and has its real allow/deny replaced by the failMode outcome.
+const WATCHDOG_MS = 8_500;
 const DEFAULT_STDIN_TIMEOUT_MS = 2_000;
 const DEFAULT_CONFIG_TIMEOUT_MS = 1_000; // config file read
-const DEFAULT_TIMEOUT_MS = 5_000; // PDP fetch
 const DEFAULT_READ_TIMEOUT_MS = 1_000; // transcript tail read
 const MAX_TIMEOUT_MS =
   WATCHDOG_MS -
   Math.max(DEFAULT_STDIN_TIMEOUT_MS, DEFAULT_CONFIG_TIMEOUT_MS) -
   DEFAULT_READ_TIMEOUT_MS;
+// Reserved for the work that no deadline covers, the audit write included.
+const BUDGET_SLACK_MS = 1_500;
+const DEFAULT_AUDIT_TIMEOUT_MS = 500; // audit append, inside the slack above
+const DEFAULT_TIMEOUT_MS = MAX_TIMEOUT_MS - BUDGET_SLACK_MS; // PDP fetch
 
 // Inbound bounds. `maxContextBytes` governs only what we send; these govern
-// what we accept and what we print, and both are hard limits rather than
+// what we accept and what we print, and all three are hard limits rather than
 // settings: an unbounded `res.json()` on a large body is an out-of-memory abort
 // (SIGABRT — uncatchable, zero stdout, every safety net below bypassed), and an
 // unbounded reason writes megabytes into a pipe the host may not be draining.
 const MAX_RESPONSE_BYTES = 1_048_576;
 const MAX_REASON_BYTES = 4_096;
+
+// stdin is exactly as model-influenced as the PDP response, and until this cap
+// existed it was bounded by time alone: everything that arrived inside the
+// stdin deadline was buffered, stringified ~4x and deep-copied twice on the
+// synchronous decision path. Measured on the unfixed build: a 600 MB payload
+// died in Buffer.concat().toString() ("Cannot create a string longer than
+// 0x1fffffe8 characters") and the check was never sent — the deny/allow the PDP
+// would have given was replaced by the failMode outcome. Capping here, at the
+// one input boundary, is what bounds every synchronous consumer downstream:
+// no timer and no signal handler can preempt synchronous work, so a stage that
+// is not bounded by size is not bounded at all.
+//
+// Exceeding the cap never cancels the check. The prefix is repaired back into
+// an object (see repairTruncatedJson) so the fields policy needs most —
+// resource.id and subject.id — survive, and the request is marked oversized so
+// the PDP knows it is judging a cut payload.
+const MAX_STDIN_BYTES = 1_048_576;
+
+// The tool name is model-controlled, reaches the PDP as `resource.id`, and is
+// run through NAME_EFFECT_PATTERNS. A megabyte-long "tool name" is not a tool
+// name; bounding it keeps both the request and the pattern scan small.
+const MAX_TOOL_NAME_BYTES = 1_024;
 
 const FAIL_MODES = ["open", "closed", "ask"];
 const DEFAULT_REDACT_KEYS = [
@@ -203,7 +237,10 @@ function resolveConfig(env, fileConfig, warn = () => {}, homedir = os.homedir())
   // A present-but-unusable failMode of any type is a misconfiguration, and on a
   // platform where the config file is the only practical mechanism it would
   // otherwise land silently on the permissive side. Absence is the only thing
-  // that may reach the default quietly.
+  // that may reach the default quietly — and "present but blank" is not
+  // absence: `""` and `"   "` are strings a user typed (or a template rendered
+  // empty), so they warn like every other unusable value rather than falling
+  // through the empty-string fallback in silence.
   const fileFailMode = Object.hasOwn(source, "failMode")
     ? source.failMode
     : undefined;
@@ -212,9 +249,20 @@ function resolveConfig(env, fileConfig, warn = () => {}, homedir = os.homedir())
       `Ignoring non-string failMode (${describeType(fileFailMode)}) in the config file; falling back to "${DEFAULT_FAIL_MODE}".`,
     );
   }
+  const envFailMode = env.DENIED_FAIL_MODE;
+  if (typeof envFailMode === "string" && envFailMode.trim() === "") {
+    warn(
+      `Ignoring blank DENIED_FAIL_MODE; falling back to the config file or "${DEFAULT_FAIL_MODE}".`,
+    );
+  }
+  if (typeof fileFailMode === "string" && fileFailMode.trim() === "") {
+    warn(
+      `Ignoring blank failMode in the config file; falling back to "${DEFAULT_FAIL_MODE}".`,
+    );
+  }
   const requestedFailMode = (
-    env.DENIED_FAIL_MODE ||
-    (typeof fileFailMode === "string" ? fileFailMode : "") ||
+    (typeof envFailMode === "string" ? envFailMode.trim() : "") ||
+    (typeof fileFailMode === "string" ? fileFailMode.trim() : "") ||
     DEFAULT_FAIL_MODE
   )
     .toString()
@@ -485,6 +533,138 @@ function parseHookPayload(raw) {
   }
 }
 
+// Rebuilds a parseable object from a JSON document that the stdin ceiling cut
+// mid-way. Returns null when nothing usable can be recovered.
+//
+// The alternative — dropping an oversized payload entirely — throws away the
+// two fields policy needs most (`resource.id` and `subject.id`), and they are
+// exactly the fields a caller cannot move past the cut. One linear scan tracks
+// string state and the container stack, and two candidates are tried in order:
+//   1. close the string the cut landed inside, then close every open container
+//      — this keeps the bulky value that caused the overflow, truncated, which
+//      is what boundedContext would have done to it anyway;
+//   2. rewind to the last point at which appending closers alone yields a valid
+//      document, and close there — used when the cut landed inside a *key*,
+//      where a closed string cannot be followed by `}`.
+// Both are parse-verified before they are returned: a repair that does not
+// parse is not a repair.
+function repairTruncatedJson(text) {
+  if (typeof text !== "string" || !text) {
+    return null;
+  }
+  const stack = []; // { closer, isObject, expectKey }
+  let inString = false;
+  let escaped = false;
+  let unicodeRemaining = 0;
+  let escapeStart = -1;
+  let stringIsKey = false;
+  // Index (exclusive) of the last position where closing every open container
+  // finishes the document. `{` and `[` qualify (an empty container closes), as
+  // does any completed value; `,` and `:` do not, so the safe point sits
+  // *before* a dangling comma.
+  let safeEnd = -1;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (unicodeRemaining > 0) {
+        unicodeRemaining -= 1;
+      } else if (escaped) {
+        escaped = false;
+        if (ch === "u") {
+          unicodeRemaining = 4;
+        }
+      } else if (ch === "\\") {
+        escaped = true;
+        escapeStart = i;
+      } else if (ch === '"') {
+        inString = false;
+        if (!stringIsKey) {
+          safeEnd = i + 1; // a string *value* completes the slot it fills
+        }
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      escaped = false;
+      unicodeRemaining = 0;
+      escapeStart = -1;
+      const top = stack[stack.length - 1];
+      stringIsKey = Boolean(top && top.isObject && top.expectKey);
+    } else if (ch === "{" || ch === "[") {
+      const isObject = ch === "{";
+      stack.push({ closer: isObject ? "}" : "]", isObject, expectKey: isObject });
+      safeEnd = i + 1;
+    } else if (ch === "}" || ch === "]") {
+      stack.pop();
+      safeEnd = i + 1;
+    } else if (ch === ":") {
+      const top = stack[stack.length - 1];
+      if (top && top.isObject) {
+        top.expectKey = false;
+      }
+    } else if (ch === ",") {
+      const top = stack[stack.length - 1];
+      if (top && top.isObject) {
+        top.expectKey = true;
+      }
+      safeEnd = i; // cut *before* the comma; a trailing comma is not JSON
+    }
+  }
+
+  // Every push and every pop moves safeEnd, so the stack has not changed since
+  // the last time it moved: one closer list serves both candidates.
+  const closers = stack
+    .map((frame) => frame.closer)
+    .reverse()
+    .join("");
+
+  const candidates = [];
+  if (inString && !stringIsKey) {
+    const cut = escaped || unicodeRemaining > 0 ? escapeStart : text.length;
+    if (cut > 0) {
+      candidates.push(`${text.slice(0, cut)}"${closers}`);
+    }
+  }
+  if (safeEnd > 0) {
+    candidates.push(text.slice(0, safeEnd) + closers);
+  }
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch {
+      /* try the next, more conservative, candidate */
+    }
+  }
+  return null;
+}
+
+// Oversized payloads carry their provenance on a non-enumerable symbol rather
+// than a field: the payload is echoed to the PDP as `hook_payload` and stored
+// in the audit log, and an injected marker key would be indistinguishable there
+// from something Antigravity actually sent.
+const OVERSIZED = Symbol("denied.oversizedPayload");
+
+function markOversized(payload, info) {
+  if (payload && typeof payload === "object") {
+    Object.defineProperty(payload, OVERSIZED, {
+      value: info,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return payload;
+}
+
+function oversizedInfo(payload) {
+  return payload && typeof payload === "object" ? payload[OVERSIZED] : undefined;
+}
+
 // Antigravity arg keys are PascalCase (`CommandLine`, `Cwd`, `DirectoryPath`),
 // unlike every other agent we integrate with, and the casing is undocumented —
 // so every lookup into args is case-insensitive.
@@ -514,9 +694,11 @@ function normalizeToolCall(input) {
   const payload = plainObject(input) ?? {};
   const toolCall = plainObject(payload.toolCall) ?? {};
   return {
+    // Bounded, with the truncation marker left visible: `resource.id` has to
+    // survive, but it does not have to survive at any size (MAX_TOOL_NAME_BYTES).
     name:
       typeof toolCall.name === "string" && toolCall.name
-        ? toolCall.name
+        ? truncatePromptString(toolCall.name, MAX_TOOL_NAME_BYTES)
         : "unknown",
     args: plainObject(toolCall.args) ?? plainObject(toolCall.arguments) ?? {},
   };
@@ -559,6 +741,19 @@ function workspacePathList(input) {
 // Effect inference (ported from extensions/hermes/src/denied_hermes/mapper.py)
 // ---------------------------------------------------------------------------
 
+// Command lines are model-controlled text, so the linearity rule stated above
+// SECRET_STRING_PATTERNS applies here too — and a negative lookahead is not
+// exempt from it. `echo(?!\s.*>)` used to guard the "read" classification, and
+// its unanchored greedy `.*` was re-evaluated to end-of-string at *every*
+// `echo`: measured on the unfixed build, `"echo " * n + ">"` cost 156 ms at
+// 80 KB, 621 ms at 160 KB, 2.5 s at 320 KB and 26 s at 1 MB — a clean 4x per
+// doubling, all of it synchronous and therefore un-preemptable by the watchdog
+// timer or by a signal handler, so the host's own timeout decided the tool call
+// instead of us. The redirection pattern below already owns the "a redirect
+// makes this a create" case; the lookahead only duplicated it, and only for the
+// redirect shapes that pattern deliberately ignores (`>` at end of input, or a
+// `|>` pipeline). `echo` with no usable redirect now classifies as "read",
+// which is what it does.
 const SHELL_EFFECT_PATTERNS = [
   [/\b(rm|rmdir|unlink)\b/i, "delete"],
   [/\bsed\s+-i\b/i, "update"],
@@ -567,7 +762,7 @@ const SHELL_EFFECT_PATTERNS = [
   [/\b(cp|mv|mkdir|touch|rsync|scp|wget\s+-O|curl\s+-o)\b/i, "create"],
   [/\b(tee|dd)\b/i, "create"],
   [
-    /\b(cat|head|tail|less|more|grep|find|ls|pwd|whoami|echo(?!\s.*>)|file|stat|wc|diff|which|type|env|printenv|date|uname)\b/i,
+    /\b(cat|head|tail|less|more|grep|find|ls|pwd|whoami|echo|file|stat|wc|diff|which|type|env|printenv|date|uname)\b/i,
     "read",
   ],
 ];
@@ -600,6 +795,16 @@ const ANTIGRAVITY_TOOL_EFFECTS = {
   multi_replace_file_content: "update",
 };
 
+// Same linearity rule, same measurement. `add_.*_member` was the second copy of
+// the SHELL_EFFECT_PATTERNS bug: `(^|_)` restarts the match at every underscore,
+// and at every one that begins `add_` the greedy `.*` ran to end-of-string and
+// backtracked. Measured on the unfixed build, a tool name of `"add_" * n` cost
+// 7 ms at 8 KB, 98 ms at 32 KB and 1.56 s at 128 KB — quadratic, on a string
+// that arrives straight from the payload. `[^_]*` cannot cross the underscore
+// that terminates it, so each restart scans one segment and the total is linear.
+// The cost is that only a single-segment role matches (`add_project_member`,
+// not `add_org_team_member`); the effect is advisory metadata, the tool name
+// itself still reaches the PDP verbatim.
 const NAME_EFFECT_PATTERNS = [
   [
     /^(read|glob|grep|webfetch|websearch|web_search|listmcpresourcestool|readmcpresourcetool)$/i,
@@ -608,7 +813,7 @@ const NAME_EFFECT_PATTERNS = [
   [/^(write|notebookedit)$/i, "create"],
   [/^(edit|multiedit|patch)$/i, "update"],
   [/(^|_)(execute|run|call|invoke|batch)(_|$)/i, "execute"],
-  [/(^|_)(share|add_.*_member)(_|$)/i, "update"],
+  [/(^|_)(share|add_[^_]*_member)(_|$)/i, "update"],
   [/(^|_)(merge|fork|copy|move)(_|$)/i, "update"],
   [/(^|_)(lock|unlock|restore)(_|$)/i, "update"],
   [/(^|_)(delete|remove|drop|unshare)(_|$)/i, "delete"],
@@ -673,6 +878,9 @@ function transcriptCandidates(resolvedPath) {
   return [resolvedPath];
 }
 
+const USER_REQUEST_OPEN = "<USER_REQUEST>\n";
+const USER_REQUEST_CLOSE = "\n</USER_REQUEST>";
+
 // Scans a transcript tail (newest content last) for the most recent USER_INPUT
 // record and unwraps its <USER_REQUEST> block. Pure: no I/O. Returns null when
 // nothing usable is found.
@@ -702,12 +910,29 @@ function extractLastUserPrompt(text) {
     ) {
       continue;
     }
-    // Non-greedy body: a trailing <USER_SETTINGS_CHANGE> block must not be
-    // swallowed, and a prompt containing the closing tag fails short, not open.
-    const match = /<USER_REQUEST>\n([\s\S]*?)\n<\/USER_REQUEST>/.exec(
-      record.content,
-    );
-    return match ? match[1] : record.content;
+    // Two indexOf calls rather than the obvious regex, and for the reason
+    // stated above SECRET_STRING_PATTERNS: `/<USER_REQUEST>\n([\s\S]*?)\n<\/USER_REQUEST>/`
+    // is quadratic in the number of *unclosed* opening markers in one record —
+    // the engine restarts the lazy body at each one and walks it to the next
+    // candidate close. Measured on the unfixed build: 5,000 markers 43 ms,
+    // 10,000 markers 173 ms, 20,000 markers (300 KB in a single `content`)
+    // 695 ms, a clean 4x per doubling. It was not reachable — DEFAULT_TAIL_BYTES
+    // caps the window at 64 KB, so ~4,300 markers was the ceiling — but the
+    // window was the only thing holding the line, and a larger tail is one
+    // config change away. The scan below is linear in the record length, so the
+    // bound is now in the code rather than in a constant somewhere else.
+    // Semantics are unchanged: the first opening marker, then the earliest
+    // closing marker after it, so a trailing <USER_SETTINGS_CHANGE> block is not
+    // swallowed and a prompt containing the closing tag fails short, not open.
+    const open = record.content.indexOf(USER_REQUEST_OPEN);
+    if (open === -1) {
+      return record.content;
+    }
+    const bodyStart = open + USER_REQUEST_OPEN.length;
+    const close = record.content.indexOf(USER_REQUEST_CLOSE, bodyStart);
+    return close === -1
+      ? record.content
+      : record.content.slice(bodyStart, close);
   }
   return null;
 }
@@ -817,6 +1042,19 @@ function buildCheckBody(input, config = DEFAULT_CONFIG, options = {}) {
   };
   if (config.includeHookPayload) {
     context.hook_payload = boundedContext(payload, config);
+  }
+  // Only present when stdin hit its ceiling, so a policy can tell "the agent
+  // sent this" from "this is as much of it as we were willing to read". Without
+  // it a repaired payload is indistinguishable from a small one.
+  const oversized = oversizedInfo(payload);
+  if (oversized) {
+    context.stdin_truncated = true;
+    context.stdin_bytes_read = oversized.bytesRead;
+    context.stdin_max_bytes = oversized.maxBytes;
+    // "prefix" — the cut happened to land on a boundary and parsed as-is;
+    // "repaired" — reconstructed from the prefix; "none" — nothing survived,
+    // and the ids below are "unknown".
+    context.payload_fidelity = oversized.fidelity;
   }
   const lastUserPrompt = options.lastUserPrompt;
   if (
@@ -987,36 +1225,58 @@ function writeAllSync(fd, buffer) {
 }
 
 // Emit guard. Exported accessors exist so the double-emit invariant is testable
-// without spawning a process. `emitted` means *delivered*, not attempted: a
-// writer that throws must leave the exit-handler net armed. `emitting` is the
-// separate re-entrancy marker, so a handler firing during the write cannot
-// start a second one.
-let emitted = false;
-let emitting = false;
-let flushPending = false;
+// without spawning a process.
+//
+// Two booleans could not express what the exit net has to know, and the gap
+// between them was reachable in both directions. A short write set the "already
+// emitted" flag while the remainder was still unwritten, so if the process
+// exited before the async flush landed (the unref'd guard below, a signal) the
+// net stayed disarmed and stdout carried a *fragment* — zero complete objects.
+// And a writer that threw after part of the buffer was already on the wire left
+// the flag false, so the net wrote a whole second object after the fragment —
+// two objects, unparseable, which denies on this platform. So the state is the
+// three states that actually exist:
+//   IDLE    nothing has reached stdout — the net owes a whole object
+//   ACTIVE  a writer is on the stack and has delivered nothing yet
+//   PARTIAL bytes are on the wire and `pendingBytes` is the rest of them —
+//           the net owes the *remainder*, never a new object
+//   DONE    the object is fully delivered — the net owes nothing
+const EMIT_IDLE = 0;
+const EMIT_ACTIVE = 1;
+const EMIT_PARTIAL = 2;
+const EMIT_DONE = 3;
+
+let emitPhase = EMIT_IDLE;
+let pendingBytes = null;
 
 function hasEmitted() {
-  return emitted;
+  return emitPhase === EMIT_DONE;
 }
 
 function resetEmitState() {
-  emitted = false;
-  emitting = false;
-  flushPending = false;
+  emitPhase = EMIT_IDLE;
+  pendingBytes = null;
 }
 
 // Returns true when this call produced the emission, false when it was
-// suppressed because a decision had already been written.
+// suppressed because a decision had already been written (or is being written).
 function emitDecision(decision, reason, writer = writeStdout) {
-  if (emitted || emitting) {
+  if (emitPhase !== EMIT_IDLE) {
     return false;
   }
-  emitting = true;
+  emitPhase = EMIT_ACTIVE;
   try {
     writer(JSON.stringify(buildDecisionOutput(decision, reason)));
-    emitted = true;
-  } finally {
-    emitting = false;
+  } catch (err) {
+    // The writer records a partial delivery itself, so ACTIVE here means
+    // nothing reached stdout: re-arm the net for a whole object.
+    if (emitPhase === EMIT_ACTIVE) {
+      emitPhase = EMIT_IDLE;
+    }
+    throw err;
+  }
+  if (emitPhase === EMIT_ACTIVE) {
+    emitPhase = EMIT_DONE;
   }
   return true;
 }
@@ -1029,21 +1289,30 @@ function writeStdout(text) {
   }
   // stdout refused a synchronous write; send only what is left — resending the
   // whole text would duplicate the part already on the wire — and let the flush
-  // callback own the exit instead of exiting under it.
-  const remainder = buffer.subarray(written);
-  flushPending = true;
+  // callback own the exit instead of exiting under it. Until that callback
+  // fires the state stays PARTIAL, which is what lets the exit handler finish
+  // the write if anything ends the process first.
+  pendingBytes = buffer.subarray(written);
+  emitPhase = EMIT_PARTIAL;
   const done = () => {
-    flushPending = false;
+    // Only the stream callback proves delivery.
+    if (emitPhase === EMIT_PARTIAL) {
+      pendingBytes = null;
+      emitPhase = EMIT_DONE;
+    }
     process.exit(0);
   };
-  const guard = setTimeout(done, FLUSH_GRACE_MS);
+  // The guard deliberately does *not* call done(): if the flush has not landed
+  // by now it has not been delivered, so it exits with the state still PARTIAL
+  // and lets the exit handler push the remainder out synchronously.
+  const guard = setTimeout(() => process.exit(0), FLUSH_GRACE_MS);
   if (typeof guard.unref === "function") {
     guard.unref();
   }
   try {
-    process.stdout.write(remainder, done);
+    process.stdout.write(pendingBytes, done);
   } catch {
-    done();
+    process.exit(0); // same reasoning as the guard
   }
 }
 
@@ -1059,8 +1328,8 @@ function emitAndExit(decision, reason) {
       `[denied-dev] Failed to emit decision: ${err instanceof Error ? err.message : String(err)}\n`,
     );
   }
-  if (flushPending) {
-    return; // the write callback owns the exit
+  if (emitPhase === EMIT_PARTIAL) {
+    return; // the write callback (or its guard) owns the exit
   }
   process.exit(0);
 }
@@ -1071,12 +1340,70 @@ function failSafeExit(message, config = activeConfig) {
   emitAndExit(outcome.decision, outcome.reason);
 }
 
-async function appendAuditRecord(input, body, decision, config = DEFAULT_CONFIG) {
+// Writes the decision to stdout, and only then attempts the audit record. The
+// ordering is the load-bearing part, not an optimisation: a blocked audit sink
+// blocks in open(2) inside the libuv threadpool, and a process with a stuck
+// threadpool thread cannot be terminated at all — measured on Node 26 / macOS,
+// neither process.exit(0) nor process.reallyExit(0) returns, so the watchdog
+// cannot save it either and the host reaps it at its own timeout. What *does*
+// survive that is anything already written to stdout. So the decision goes out
+// first and the audit is attempted afterwards, under its own deadline: the
+// worst case degrades from "the host picks the outcome" to "the record is
+// missing".
+async function emitThenAudit(decision, reason, input, body, record, config) {
+  try {
+    emitDecision(decision, reason);
+  } catch (err) {
+    writeStderr(
+      `[denied-dev] Failed to emit decision: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+  }
+  await appendAuditRecord(input, body, record, config);
+  if (emitPhase === EMIT_PARTIAL) {
+    return; // the write callback (or its guard) owns the exit
+  }
+  process.exit(0);
+}
+
+async function failSafeAudit(message, input, body, record, config) {
+  warnStderr(message);
+  const outcome = resolveFailSafe(config.failMode, message);
+  await emitThenAudit(outcome.decision, outcome.reason, input, body, record, config);
+}
+
+const AUDIT_TIMED_OUT = Symbol("audit-timed-out");
+
+// Audit is observability, never a gate on the decision — and "never a gate"
+// has to include *time*. This is awaited on the decision path, ahead of the
+// deny/allow emit, and neither fs.mkdir nor fs.appendFile has a deadline of its
+// own; on a wedged or full filesystem (NFS, FUSE, a full disk) the watchdog
+// still fired, so exit 0 and the one-object invariant held, but a real deny had
+// already been replaced by the failMode outcome — silently an *allow* under the
+// default failMode: open. So the write is raced against its own deadline the
+// same way the config read is, and the deadline sits inside BUDGET_SLACK_MS.
+// The write promise keeps its own .catch, so a rejection arriving after the
+// race is handled rather than becoming an unhandledRejection.
+async function appendAuditRecord(
+  input,
+  body,
+  decision,
+  config = DEFAULT_CONFIG,
+  timeoutMs = DEFAULT_AUDIT_TIMEOUT_MS,
+) {
   if (!config.audit?.enabled) {
     return;
   }
 
-  try {
+  const controller = new AbortController();
+  let timer;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(AUDIT_TIMED_OUT);
+    }, timeoutMs);
+  });
+
+  const write = (async () => {
     await fs.mkdir(config.audit.dir, { recursive: true });
     const record = {
       timestamp: new Date().toISOString(),
@@ -1093,12 +1420,21 @@ async function appendAuditRecord(input, body, decision, config = DEFAULT_CONFIG)
     await fs.appendFile(
       path.join(config.audit.dir, "denied-antigravity-hook.jsonl"),
       `${JSON.stringify(record)}\n`,
-      "utf-8",
+      { encoding: "utf-8", signal: controller.signal },
     );
-  } catch (err) {
-    // Audit is observability, never a gate on the decision.
+  })().catch((err) => {
     const message = err instanceof Error ? err.message : String(err);
     warnStderr(`Failed to write audit record: ${message}`);
+  });
+
+  try {
+    if ((await Promise.race([write, deadline])) === AUDIT_TIMED_OUT) {
+      warnStderr(
+        `Audit write did not complete within ${timeoutMs}ms; abandoning the record rather than delaying the decision.`,
+      );
+    }
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -1106,24 +1442,67 @@ async function appendAuditRecord(input, body, decision, config = DEFAULT_CONFIG)
 // Read stdin (Antigravity streams the hook context as JSON, and may not close)
 // ---------------------------------------------------------------------------
 
-// Never throws and never outlives its deadline: whatever arrived (or nothing)
-// becomes a payload object and the check proceeds.
+// Never throws, never outlives its deadline, and never exceeds its byte
+// ceiling: whatever arrived (or nothing) becomes a payload object and the check
+// proceeds. The two bounds are independent — time alone left every downstream
+// synchronous stage unbounded (see MAX_STDIN_BYTES).
+//
+// Stopping early closes stdin under a host that is still writing. That is the
+// deliberate trade: the alternative is buffering a payload we have already
+// decided not to send. Everything up to the ceiling is kept and repaired, so
+// the check still goes out.
 async function readStdin(
   stream = process.stdin,
   timeoutMs = DEFAULT_STDIN_TIMEOUT_MS,
+  maxBytes = MAX_STDIN_BYTES,
 ) {
   const chunks = [];
+  let size = 0;
+  let overflow = false;
   const timer = setTimeout(() => stream.destroy(), timeoutMs);
   try {
     for await (const chunk of stream) {
-      chunks.push(chunk);
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      if (size + buffer.length > maxBytes) {
+        chunks.push(buffer.subarray(0, maxBytes - size));
+        size = maxBytes;
+        overflow = true;
+        break; // breaking destroys the stream and releases the pipe
+      }
+      chunks.push(buffer);
+      size += buffer.length;
     }
   } catch {
     /* destroyed by the deadline, or unreadable — fall through to what we have */
   } finally {
     clearTimeout(timer);
   }
-  return parseHookPayload(Buffer.concat(chunks).toString("utf-8"));
+
+  const text = Buffer.concat(chunks).toString("utf-8");
+  if (!overflow) {
+    return parseHookPayload(text);
+  }
+
+  // A cut document almost never parses, so the prefix is repaired rather than
+  // dropped: an oversized payload is not a reason to stop asking the PDP, and
+  // the tool name and conversation id both sit near the front of it.
+  let payload = parseHookPayload(text);
+  let fidelity = Object.keys(payload).length ? "prefix" : "none";
+  if (fidelity === "none") {
+    const repaired = repairTruncatedJson(text);
+    if (repaired && Object.keys(repaired).length) {
+      payload = repaired;
+      fidelity = "repaired";
+    }
+  }
+  warnStderr(
+    `Hook payload exceeded ${maxBytes} bytes; truncated at the ceiling and sending the check with a ${fidelity} payload.`,
+  );
+  return markOversized(payload, {
+    bytesRead: size,
+    maxBytes,
+    fidelity,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1169,7 +1548,8 @@ async function main() {
     return resolved;
   });
   // stdin is drained before any early exit so the host never writes into a
-  // closed pipe on the missing-API-key path.
+  // closed pipe on the missing-API-key path — up to MAX_STDIN_BYTES, past which
+  // the pipe is closed deliberately (see readStdin).
   const [config, input] = await Promise.all([configPromise, readStdin()]);
 
   if (!config.apiKey) {
@@ -1214,8 +1594,7 @@ async function main() {
       const error = {
         error: `HTTP ${res.status}: ${truncatePromptString(text, MAX_REASON_BYTES)}`,
       };
-      await appendAuditRecord(input, body, error, config);
-      failSafeExit(error.error, config);
+      await failSafeAudit(error.error, input, body, error, config);
       return;
     }
 
@@ -1228,29 +1607,38 @@ async function main() {
       data = JSON.parse(text);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await appendAuditRecord(input, body, { error: message }, config);
-      failSafeExit(`PDP response was not valid JSON: ${message}`, config);
+      await failSafeAudit(
+        `PDP response was not valid JSON: ${message}`,
+        input,
+        body,
+        { error: message },
+        config,
+      );
       return;
     }
 
-    await appendAuditRecord(input, body, data, config);
     const outcome = interpretDecision(data);
 
     if (outcome.kind === "allow") {
-      emitAndExit("allow", "");
+      await emitThenAudit("allow", "", input, body, data, config);
       return;
     }
     if (outcome.kind === "deny") {
       warnStderr(`Blocked tool call: ${body.resource.id}`);
       warnStderr(outcome.reason);
-      emitAndExit("deny", outcome.reason);
+      await emitThenAudit("deny", outcome.reason, input, body, data, config);
       return;
     }
-    failSafeExit(outcome.reason, config);
+    await failSafeAudit(outcome.reason, input, body, data, config);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await appendAuditRecord(input, body, { error: message }, config);
-    failSafeExit(`Failed to reach Denied PDP: ${message}`, config);
+    await failSafeAudit(
+      `Failed to reach Denied PDP: ${message}`,
+      input,
+      body,
+      { error: message },
+      config,
+    );
   } finally {
     clearTimeout(timer);
   }
@@ -1270,6 +1658,16 @@ if (require.main === module) {
   // the IDE sends SIGHUP — and it bypasses the exit handler below entirely,
   // leaving empty stdout and the outcome to the host. SIGKILL and SIGSTOP
   // cannot be caught; every other signal ends in a decision and exit 0.
+  //
+  // With one structural caveat, which the watchdog below shares: a handler is
+  // an event-loop callback and cannot preempt synchronous work. A signal (or a
+  // watchdog expiry) arriving during a long synchronous burst is queued, not
+  // handled, and the host's own timeout wins. That is why every synchronous
+  // stage on the decision path is bounded by *size* rather than by time —
+  // MAX_STDIN_BYTES on the payload, MAX_TOOL_NAME_BYTES on the name matched
+  // against NAME_EFFECT_PATTERNS, MAX_REDACT_STRING_BYTES on each redacted
+  // string — and why every pattern in this file must be linear in its input.
+  // Those bounds, not these handlers, are what makes the claim above true.
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"]) {
     process.on(signal, () =>
       failSafeExit(`Received ${signal} before a decision was made.`),
@@ -1281,22 +1679,35 @@ if (require.main === module) {
   process.on("SIGPIPE", () => {});
   // Last resort: if the process somehow reaches exit without a decision, the
   // host would choose the outcome — which is the one thing never permitted.
+  // Which debt is owed depends on the emit state: a half-written object is
+  // *finished*, never restarted, because a second complete object after a
+  // fragment is exactly as unparseable as the fragment alone.
   process.on("exit", () => {
-    if (!emitted) {
-      emitted = true;
-      const outcome = resolveFailSafe(
-        activeConfig.failMode,
-        "Interceptor exited without a decision.",
-      );
-      const payload = Buffer.from(
-        JSON.stringify(buildDecisionOutput(outcome.decision, outcome.reason)),
-        "utf-8",
-      );
-      if (writeAllSync(STDOUT_FD, payload) < payload.length) {
-        // No async fallback is possible under `exit`; say so rather than let a
-        // partial object look like a decision.
-        writeStderr("[denied-dev] Failed to flush the fail-safe decision.\n");
+    if (emitPhase === EMIT_DONE) {
+      return;
+    }
+    if (emitPhase === EMIT_PARTIAL && pendingBytes && pendingBytes.length) {
+      const remainder = pendingBytes;
+      pendingBytes = null;
+      emitPhase = EMIT_DONE;
+      if (writeAllSync(STDOUT_FD, remainder) < remainder.length) {
+        writeStderr("[denied-dev] Failed to flush the rest of the decision.\n");
       }
+      return;
+    }
+    emitPhase = EMIT_DONE;
+    const outcome = resolveFailSafe(
+      activeConfig.failMode,
+      "Interceptor exited without a decision.",
+    );
+    const payload = Buffer.from(
+      JSON.stringify(buildDecisionOutput(outcome.decision, outcome.reason)),
+      "utf-8",
+    );
+    if (writeAllSync(STDOUT_FD, payload) < payload.length) {
+      // No async fallback is possible under `exit`; say so rather than let a
+      // partial object look like a decision.
+      writeStderr("[denied-dev] Failed to flush the fail-safe decision.\n");
     }
   });
   // Deliberately not unref'd: keeping the event loop alive means the process
@@ -1307,7 +1718,7 @@ if (require.main === module) {
     );
   }, WATCHDOG_MS);
   main().then(() => {
-    if (!emitted) {
+    if (!hasEmitted()) {
       failSafeExit("Interceptor finished without emitting a decision.");
     }
   }, onFatal);
@@ -1317,14 +1728,18 @@ module.exports = {
   WATCHDOG_MS,
   MAX_TIMEOUT_MS,
   DEFAULT_TIMEOUT_MS,
+  BUDGET_SLACK_MS,
   DEFAULT_STDIN_TIMEOUT_MS,
   DEFAULT_CONFIG_TIMEOUT_MS,
   DEFAULT_READ_TIMEOUT_MS,
+  DEFAULT_AUDIT_TIMEOUT_MS,
   DEFAULT_TAIL_BYTES,
   DEFAULT_REDACT_KEYS,
   MAX_REDACT_STRING_BYTES,
   MAX_REASON_BYTES,
   MAX_RESPONSE_BYTES,
+  MAX_STDIN_BYTES,
+  MAX_TOOL_NAME_BYTES,
   FAIL_MODES,
   resolveConfigPath,
   loadFileConfig,
@@ -1345,6 +1760,7 @@ module.exports = {
   deriveSurface,
   caseInsensitiveGet,
   parseHookPayload,
+  repairTruncatedJson,
   normalizeToolCall,
   workspacePathList,
   buildCheckBody,
