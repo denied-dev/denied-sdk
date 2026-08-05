@@ -275,16 +275,6 @@ Revisit triggers — check these each planning cycle:
 | `Watchdog fired after 8000ms`                     | Something stalled                              | The configured `failMode` decision was emitted. Check PDP reachability and filesystem responsiveness.                       |
 | Tool calls succeed but no decisions appear in the log | A stale `DENIED_*` env var is overriding your config file | Run `env \| grep DENIED_`. Environment variables beat `~/.denied/config.json` by design, so a leftover `export DENIED_URL=...` sends every check to the wrong address; under the default `failMode: open` the gate then allows everything while looking installed. Unset it, or launch `agy` from a clean shell. |
 
-### If `failMode: closed` locks you out
-
-`~/.denied/config.json` is shared by **every** Denied extension on the machine — the Antigravity hook, the Claude Code hook, Codex, Kiro. With `failMode: closed`, an unreachable PDP correctly denies *every* tool call in *every* gated agent, including the tools you would use to fix it. Recover from a plain shell:
-
-```bash
-rm ~/.denied/config.json          # or edit it back to "failMode": "open"
-```
-
-This is the gate working as designed, not a bug — but it is worth knowing before you set `closed`. When testing a policy against a throwaway PDP, point only the process under test at it with `DENIED_CONFIG=/path/to/test-config.json` instead of editing the global file.
-
 ## Uninstalling
 
 ```bash
