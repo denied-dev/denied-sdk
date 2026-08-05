@@ -112,6 +112,15 @@ test("resolveConfig ignores a non-numeric DENIED_TIMEOUT_MS and uses the file va
   assert.equal(resolveConfig({ DENIED_TIMEOUT_MS: "abc" }, { timeoutMs: 7000 }).timeoutMs, 7000);
 });
 
+test("resolveConfig rejects a zero or negative timeout at every tier", () => {
+  // A non-positive timeout would abort every PDP call before it completes —
+  // a gate that silently never enforces.
+  assert.equal(resolveConfig({ DENIED_TIMEOUT_MS: "0" }, {}).timeoutMs, 15000);
+  assert.equal(resolveConfig({ DENIED_TIMEOUT_MS: "-5" }, { timeoutMs: 7000 }).timeoutMs, 7000);
+  assert.equal(resolveConfig({}, { timeoutMs: 0 }).timeoutMs, 15000);
+  assert.equal(resolveConfig({}, { timeoutMs: -1 }).timeoutMs, 15000);
+});
+
 test("resolveConfig ignores a non-string file failMode", () => {
   assert.equal(resolveConfig({}, { failMode: 42 }).failMode, "open");
 });

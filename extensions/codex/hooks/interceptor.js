@@ -57,12 +57,12 @@ async function loadFileConfig(configPath, warn = () => { }) {
 // Merges env vars (highest precedence), file config, and defaults into the
 // resolved settings. Pure function — no I/O — for unit testing.
 function resolveConfig(env, fileConfig) {
-  const timeoutFromEnv = parseInt(env.DENIED_TIMEOUT_MS ?? "", 10);
-  const timeoutMs = Number.isFinite(timeoutFromEnv)
-    ? timeoutFromEnv
-    : Number.isFinite(fileConfig.timeoutMs)
-      ? fileConfig.timeoutMs
-      : DEFAULT_TIMEOUT_MS;
+  // A zero or negative timeout would abort every PDP call before it completes —
+  // a gate that silently never enforces — so non-positive values fall through.
+  const timeoutMs = positiveInteger(
+    env.DENIED_TIMEOUT_MS,
+    positiveInteger(fileConfig.timeoutMs, DEFAULT_TIMEOUT_MS),
+  );
   const requestConfig =
     fileConfig.request && typeof fileConfig.request === "object"
       ? fileConfig.request
