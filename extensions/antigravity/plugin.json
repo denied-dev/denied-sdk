@@ -1,0 +1,4 @@
+{
+  "name": "denied-antigravity",
+  "description": "Denied authorization gate for Google Antigravity — checks every tool call against your Denied policies before it runs"
+}

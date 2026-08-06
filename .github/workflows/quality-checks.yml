@@ -128,6 +128,7 @@ jobs:
       - name: Run extension tests
         run: >-
           node --test
+          extensions/antigravity/hooks/interceptor.test.js
           extensions/claude-code/hooks/interceptor.test.js
           extensions/codex/hooks/interceptor.test.js
           extensions/kiro/hooks/interceptor.test.js
