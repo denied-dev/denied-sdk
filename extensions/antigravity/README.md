@@ -1,6 +1,6 @@
 # Denied SDK Plugin for Google Antigravity
 
-Antigravity agents can execute powerful tools — shell commands, file edits, web fetches, subagents, MCP servers. [Denied](https://denied.dev) defines the boundaries of what your agent can and cannot do: before a tool executes, this plugin checks with the Denied authorization server whether the agent is permitted to run it. If the policy says no, the tool call is blocked and the reason is returned to the agent. You define the boundaries; the plugin enforces them.
+Antigravity agents can execute powerful tools — shell commands, file edits, web fetches, subagents, MCP servers. [Denied](https://denied.dev) defines the boundaries of what your agent can and cannot do: before a tool executes, this plugin checks with the Denied authorization server (the PDP, or Policy Decision Point) whether the agent is permitted to run it. If the policy says no, the tool call is blocked and the reason is returned to the agent. You define the boundaries; the plugin enforces them.
 
 ## Coverage — read this first
 
@@ -18,7 +18,7 @@ The installer therefore writes the registration **globally**, where all three su
 
 ## Prerequisites
 
-- [Antigravity `agy` CLI](https://antigravity.google/docs/cli) installed and working
+- [Antigravity `agy` CLI](https://antigravity.google/docs/cli/getting-started) installed and working
 - Node.js 18+ on the machine (the installer resolves an absolute interpreter path; if no `node` is on `PATH` it falls back to Antigravity's own bundled `agy-node` shim)
 - macOS or Linux. **Windows is not supported** — Antigravity hook execution is broken there ([#222](https://github.com/google-antigravity/antigravity-cli/issues/222)), and the installer refuses to run
 - A Denied account and API key. Sign up at [app.denied.dev](https://app.denied.dev)
@@ -67,12 +67,14 @@ Create `~/.denied/config.json`:
 
 ### Step 3: Verify it's working
 
-Ask the agent to run a command. With no policies configured, it is denied, and the reason is surfaced to the agent inline. On stderr you will see:
+Ask the agent to run a command. With an API key configured (Step 2) and no policies yet, it is denied: the reason appears inline in the agent's reply, and the check shows up as a decision in the [Denied dashboard](https://app.denied.dev) log. On the hook's stderr you will see:
 
 ```
 [denied-dev] Blocked tool call: run_command
 [denied-dev] Authorization denied by Denied policy engine.
 ```
+
+If the command runs instead, the check most likely never reached the PDP (no API key, wrong URL, or the server is unreachable) and the default `failMode: open` allowed it through. Check the [Troubleshooting](#troubleshooting) table.
 
 ### Manual installation (fallback)
 
@@ -97,7 +99,7 @@ Copy `extensions/antigravity/hooks/interceptor.js` somewhere stable, then write 
 }
 ```
 
-The template committed at `extensions/antigravity/hooks.json` ships a deliberately invalid placeholder command so that pasting it unedited fails loudly. **Get the paths wrong and the failure is silent and version-dependent**: on agy ≤1.1.7 an unrunnable hook command denied every tool call; on 1.1.10 it silently allows everything. Antigravity has no `${PLUGIN_ROOT}`-style interpolation, `~` inside the command is expanded by the shell but relative paths resolve against the directory containing `hooks.json`, so absolute paths are mandatory. `timeout` is in seconds and is deliberately set below Antigravity's 30s default so the interceptor's own 8s watchdog always wins.
+The template committed at `extensions/antigravity/hooks.json` ships a deliberately invalid placeholder command so that pasting it unedited fails loudly. **Get the paths wrong and the failure is silent and version-dependent**: on agy ≤1.1.7 an unrunnable hook command denied every tool call; on 1.1.10 it silently allows everything. Antigravity has no `${PLUGIN_ROOT}`-style interpolation, `~` inside the command is expanded by the shell but relative paths resolve against the directory containing `hooks.json`, so absolute paths are mandatory. `timeout` is in seconds and is deliberately set below Antigravity's 30s default so the interceptor's own 8.5s watchdog always wins.
 
 `hooks.json` is a **map of named hook groups**, not a flat event map, and it sits at the plugin root — never inside `hooks/`. `plugin.json` carries **only** `name` and `description`; adding a Claude-Code-style `"hooks": "hooks.json"` key is a known cause of hooks that silently never fire.
 
@@ -110,7 +112,7 @@ Settings resolve in this order: **environment variable** → **`$DENIED_CONFIG`*
 | `DENIED_API_KEY`     | `apiKey`                                   | —                                                                  | Required. API key for the Denied PDP.                                                    |
 | `DENIED_URL`         | `url`                                      | `https://api.denied.dev`                                           | PDP endpoint. Only change for custom deployments.                                        |
 | `DENIED_FAIL_MODE`   | `failMode`                                 | `open`                                                             | `open` allows on error, `closed` denies, `ask` defers to the user (see below).            |
-| `DENIED_TIMEOUT_MS`  | `timeoutMs`                                | `5000`                                                             | PDP fetch timeout. Clamped to 5000 ms to fit the watchdog, with a warning on stderr.      |
+| `DENIED_TIMEOUT_MS`  | `timeoutMs`                                | `4000`                                                             | PDP fetch timeout. Clamped to 5500 ms to fit the watchdog, with a warning on stderr.      |
 | `DENIED_CONFIG`      | —                                          | `~/.denied/config.json`                                            | Path to the JSON config file. Resolved from your home directory, never from `cwd`.        |
 | —                    | `surface`                                  | `unknown`                                                          | `cli` / `ide` / `app`. **Fallback only** — normally derived from the payload paths.       |
 | —                    | `request.includeToolInput`                 | `true`                                                             | Send the tool arguments as bounded resource context.                                     |
@@ -132,7 +134,7 @@ Example `~/.denied/config.json`:
   "apiKey": "your-api-key",
   "url": "https://api.denied.dev",
   "failMode": "open",
-  "timeoutMs": 5000,
+  "timeoutMs": 4000,
   "request": {
     "includeToolInput": true,
     "includeHookPayload": true,
@@ -174,7 +176,7 @@ Antigravity streams the hook context to the interceptor as JSON on stdin. The in
 
 - **Subject**: `antigravity://<conversationId>`, with `surface` (`cli` / `ide` / `app`, derived from the profile directory in the payload paths), `workspace_paths`, `cwd`, `step_idx` and `model_name` as properties
 - **Action**: `execute`, with an inferred `effect` (`read` / `create` / `update` / `delete` / `execute`) and the `tool_name` as properties
-- **Resource**: `tool://<toolCall.name>` — the name exactly as Antigravity sent it — with bounded `tool_input` as a property by default
+- **Resource**: `tool://<toolCall.name>` — the name exactly as Antigravity sent it (truncated, with a visible marker, only past 1 KB) — with bounded `tool_input` as a property by default
 - **Context**: the integration name, the hook event (hardcoded — Antigravity does not put it in the payload), `artifact_directory_path`, plus the bounded hook payload and `last_user_prompt` by default
 
 The hook matches every tool (`"*"`). All policy evaluation happens server-side.
@@ -201,17 +203,19 @@ So the interceptor never returns a failure to the host. Every code path — cras
 
 ### Timeout budget
 
-Four nested deadlines, all strictly inside the hook timeout:
+Every stage carries its own deadline, all strictly inside the hook timeout:
 
-| Deadline                        | Value  | Set where                     |
-| ------------------------------- | ------ | ----------------------------- |
-| Host hook `timeout`             | 10 s   | `hooks.json`                  |
-| Interceptor watchdog            | 8 s    | fixed in the interceptor      |
-| stdin read                      | 2 s    | fixed in the interceptor      |
-| PDP fetch (`timeoutMs`)         | 5 s    | config, clamped to ≤ 5000 ms  |
-| Transcript tail read            | 1 s    | fixed in the interceptor      |
+| Deadline                        | Value            | Set where                     |
+| ------------------------------- | ---------------- | ----------------------------- |
+| Host hook `timeout`             | 10 s             | `hooks.json`                  |
+| Interceptor watchdog            | 8.5 s            | fixed in the interceptor      |
+| stdin read                      | 2 s              | fixed in the interceptor      |
+| Config file read                | 1 s, concurrent with stdin | fixed in the interceptor |
+| PDP fetch (`timeoutMs`)         | 4 s by default   | config, clamped to ≤ 5500 ms  |
+| Transcript tail read            | 1 s              | fixed in the interceptor      |
+| Audit write                     | 0.5 s, after the decision is emitted | fixed in the interceptor |
 
-The invariant is `stdin + fetch + transcript ≤ watchdog < host timeout`, so a stall always resolves into *our* fail-safe decision rather than the host's current mood. A `timeoutMs` above the budget is clamped, with a warning on stderr.
+The stdin and config reads run concurrently, so only the larger of the two spends budget. The invariant is `max(stdin, config) + fetch + transcript ≤ watchdog < host timeout`, so a stall always resolves into *our* fail-safe decision rather than the host's current mood. At the 5500 ms clamp ceiling the fetch exhausts that budget exactly; the 4000 ms default leaves 1500 ms of slack for the work no deadline covers (parsing, redaction, serialization) and for the audit write, which runs only after the decision is already on stdout. A `timeoutMs` above the ceiling is clamped, with a warning on stderr.
 
 ## Default behavior
 
@@ -271,8 +275,8 @@ Revisit triggers — check these each planning cycle:
 | `Ignoring malformed config file`                  | `~/.denied/config.json` isn't valid JSON       | Fix the JSON syntax, or delete the file to fall back to env vars and defaults.                                              |
 | `Failed to reach Denied PDP: ...`                 | Can't reach the Denied server                  | Check `url`/`DENIED_URL` and network connectivity. Behaviour on failure follows `failMode`.                                 |
 | `HTTP 401` or `403`                               | Invalid or missing API key                     | Check `apiKey` in `~/.denied/config.json` or the `DENIED_API_KEY` env var.                                                  |
-| `timeoutMs ... exceeds the ... watchdog budget`   | Configured timeout too large                   | Informational — it was clamped. Lower `timeoutMs` to 5000 or less to silence it.                                            |
-| `Watchdog fired after 8000ms`                     | Something stalled                              | The configured `failMode` decision was emitted. Check PDP reachability and filesystem responsiveness.                       |
+| `timeoutMs ... exceeds the ... watchdog budget`   | Configured timeout too large                   | Informational — it was clamped. Lower `timeoutMs` to 5500 or less to silence it.                                            |
+| `Watchdog fired after 8500ms`                     | Something stalled                              | The configured `failMode` decision was emitted. Check PDP reachability and filesystem responsiveness.                       |
 | Tool calls succeed but no decisions appear in the log | A stale `DENIED_*` env var is overriding your config file | Run `env \| grep DENIED_`. Environment variables beat `~/.denied/config.json` by design, so a leftover `export DENIED_URL=...` sends every check to the wrong address; under the default `failMode: open` the gate then allows everything while looking installed. Unset it, or launch `agy` from a clean shell. |
 
 ## Uninstalling
@@ -281,7 +285,7 @@ Revisit triggers — check these each planning cycle:
 ./uninstall.sh
 ```
 
-It takes the same `--scope`, `--workspace`, `--node` and `--dry-run` flags as the installer, and removes only the `denied-authz` group from the hook files it installed — other hook groups are left intact — and deletes the staged interceptor. `~/.denied/config.json` is left alone in case you still want the API key. Restart any running `agy` session afterwards.
+It takes the same `--scope`, `--workspace`, `--node` and `--dry-run` flags as the installer, and removes only the `denied-authz` group from the hook files it installed — other hook groups are left intact. The staged interceptor is deleted only once no known registration still points at it: if another scope (say, a workspace outside the one you passed) still registers the hook, the interceptor is kept and the surviving file is listed, because deleting it out from under a live registration would leave a hook command that cannot run. `~/.denied/config.json` is left alone in case you still want the API key. Restart any running `agy` session afterwards.
 
 ## Links
 
