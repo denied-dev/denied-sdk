@@ -31,9 +31,11 @@ const INTERCEPTOR_PLACEHOLDER = "__DENIED_INTERCEPTOR_PATH__";
 // installs may have left one behind; --check reports them and --uninstall removes them.
 const LEGACY_HOOK_PATTERN = /^denied.*\.kiro\.hook$/i;
 const MIN_NODE_MAJOR = 18;
+const MIN_KIRO_IDE_VERSION = "1.0.182";
 const MANIFEST_VERSION = 1;
 const DEFAULT_URL = "https://api.denied.dev";
 const PROBE_TIMEOUT_MS = 5_000;
+const VERSION_PROBE_TIMEOUT_MS = 5_000;
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 
@@ -116,6 +118,22 @@ function hashText(text) {
 function parseNodeMajor(versionText) {
   const match = /v?(\d+)\./.exec(String(versionText).trim());
   return match ? Number.parseInt(match[1], 10) : null;
+}
+
+function parseKiroIdeVersion(versionText) {
+  const match = /(?:^|[^\d])(\d+\.\d+\.\d+)(?:[^\d]|$)/m.exec(String(versionText));
+  return match ? match[1] : null;
+}
+
+function compareDottedVersions(left, right) {
+  const leftParts = String(left).split(".").map(Number);
+  const rightParts = String(right).split(".").map(Number);
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (difference !== 0) return difference < 0 ? -1 : 1;
+  }
+  return 0;
 }
 
 // Renders the v1 template into a single hook entry with an absolute interceptor
@@ -286,6 +304,73 @@ function findOnPath(name, env, exists, platform = process.platform) {
   return null;
 }
 
+function runVersionCommand(command, args, env, spawn = spawnSync, platform = process.platform) {
+  let result;
+  try {
+    result = spawn(command, args, {
+      encoding: "utf-8",
+      env,
+      shell: platform === "win32",
+      timeout: VERSION_PROBE_TIMEOUT_MS,
+    });
+  } catch (err) {
+    return { version: null, error: err.message };
+  }
+  if (result.error || result.status !== 0) {
+    return {
+      version: null,
+      error: result.error ? result.error.message : `${path.basename(command)} exited ${result.status}`,
+    };
+  }
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  const version = parseKiroIdeVersion(output);
+  return version
+    ? { version }
+    : { version: null, error: `unrecognised version output: ${output.trim() || "<empty>"}` };
+}
+
+// Prefer application metadata on macOS so detection works even when Kiro's
+// optional shell integration is not on PATH. Elsewhere, the `kiro` shell
+// command is the portable signal available to a zero-dependency installer.
+function detectKiroIdeVersion({
+  env,
+  homedir,
+  exists = fs.existsSync,
+  spawn = spawnSync,
+  platform = process.platform,
+}) {
+  const detected = [];
+
+  if (platform === "darwin") {
+    const appPaths = ["/Applications/Kiro.app", path.join(homedir, "Applications", "Kiro.app")];
+    for (const appPath of appPaths) {
+      if (!exists(appPath)) continue;
+      detected.push(appPath);
+      const infoPlist = path.join(appPath, "Contents", "Info.plist");
+      if (!exists(infoPlist)) continue;
+      const probe = runVersionCommand(
+        "/usr/bin/plutil",
+        ["-extract", "CFBundleShortVersionString", "raw", "-o", "-", infoPlist],
+        env,
+        spawn,
+        platform,
+      );
+      if (probe.version) return { found: true, path: appPath, version: probe.version };
+    }
+  }
+
+  const executable = findOnPath("kiro", env, exists, platform);
+  if (executable) {
+    detected.push(executable);
+    const probe = runVersionCommand(executable, ["--version"], env, spawn, platform);
+    if (probe.version) return { found: true, path: executable, version: probe.version };
+  }
+
+  return detected.length > 0
+    ? { found: true, path: detected[0], version: null }
+    : { found: false, path: null, version: null };
+}
+
 // ---------------------------------------------------------------------------
 // I/O helpers
 // ---------------------------------------------------------------------------
@@ -384,7 +469,7 @@ function preflight(ctx) {
     hasApiKeyEnv: Boolean(ctx.env.DENIED_API_KEY),
     kiroHome: fs.existsSync(ctx.paths.kiroHome),
     kiroCliPath: findOnPath("kiro-cli", ctx.env, exists),
-    kiroApp: fs.existsSync("/Applications/Kiro.app"),
+    kiroIde: ctx.detectKiroIdeVersion(),
   };
 }
 
@@ -397,7 +482,17 @@ function reportPreflight(ctx, pre) {
   );
   ctx.out(`  ~/.kiro present: ${pre.kiroHome ? "yes" : "no"}`);
   ctx.out(`  kiro-cli on PATH: ${pre.kiroCliPath ? pre.kiroCliPath : "no"}`);
-  ctx.out(`  Kiro IDE application: ${pre.kiroApp ? "/Applications/Kiro.app" : "not found"}`);
+  if (pre.kiroIde.version) {
+    const compatibility =
+      compareDottedVersions(pre.kiroIde.version, MIN_KIRO_IDE_VERSION) >= 0
+        ? "supported"
+        : `unsupported; need >= ${MIN_KIRO_IDE_VERSION}`;
+    ctx.out(`  Kiro IDE ${pre.kiroIde.version}: ${pre.kiroIde.path} (${compatibility})`);
+  } else if (pre.kiroIde.found) {
+    ctx.out(`  Kiro IDE application: ${pre.kiroIde.path} (version could not be determined)`);
+  } else {
+    ctx.out("  Kiro IDE application: not found");
+  }
 }
 
 async function runInstall(ctx) {
@@ -414,6 +509,17 @@ async function runInstall(ctx) {
     ctx.out("  `node <interceptor>` will not run without one.");
     ctx.out("  Install from https://nodejs.org/ (or `brew install node`), then re-run this installer.");
     return 1;
+  }
+
+  if (
+    pre.kiroIde.version &&
+    compareDottedVersions(pre.kiroIde.version, MIN_KIRO_IDE_VERSION) < 0
+  ) {
+    ctx.blank();
+    ctx.out(`WARNING: Kiro IDE ${pre.kiroIde.version} is not supported by this integration.`);
+    ctx.out(`  The v1 hook requires Kiro IDE >= ${MIN_KIRO_IDE_VERSION}.`);
+    ctx.out("  Installation can continue for Kiro CLI V3, but this IDE will not be enforced.");
+    ctx.out("  Update Kiro IDE, then re-run `--check`.");
   }
 
   if (!pre.hasConfigFile && !pre.hasApiKeyEnv) {
@@ -636,6 +742,24 @@ async function runCheck(ctx) {
     results.push({ ok, label, detail });
     ctx.out(`  [${ok ? "PASS" : "FAIL"}] ${label}${detail ? `: ${detail}` : ""}`);
   };
+
+  const kiroIde = ctx.detectKiroIdeVersion();
+  if (kiroIde.version) {
+    const supported = compareDottedVersions(kiroIde.version, MIN_KIRO_IDE_VERSION) >= 0;
+    record(
+      supported,
+      "Kiro IDE version",
+      supported
+        ? `${kiroIde.version} at ${kiroIde.path} (>= ${MIN_KIRO_IDE_VERSION})`
+        : `${kiroIde.version} at ${kiroIde.path} is unsupported; update to >= ${MIN_KIRO_IDE_VERSION}`,
+    );
+  } else if (kiroIde.found) {
+    ctx.out(
+      `  [WARN] Kiro IDE version: could not determine the version at ${kiroIde.path}; compatibility was not checked`,
+    );
+  } else {
+    ctx.out("  [INFO] Kiro IDE version: IDE not detected; checking the shared hook installation");
+  }
 
   for (const hookFile of paths.hookFiles) {
     const raw = readTextOrNull(hookFile.path);
@@ -899,6 +1023,13 @@ async function run(options = {}) {
       options.interceptorSource ?? path.join(__dirname, "hooks", "interceptor.js"),
     templatePath: options.templatePath ?? path.join(__dirname, "templates", "hook-v1.json"),
     fetchImpl: options.fetch ?? globalThis.fetch,
+    detectKiroIdeVersion:
+      options.detectKiroIdeVersion ??
+      (() =>
+        detectKiroIdeVersion({
+          env: options.env ?? process.env,
+          homedir,
+        })),
     out: (line) => emit(`${PREFIX} ${line}`),
     blank: () => emit(""),
   };
@@ -930,11 +1061,14 @@ module.exports = {
   HOOK_NAME,
   INTERCEPTOR_PLACEHOLDER,
   LEGACY_HOOK_PATTERN,
+  MIN_KIRO_IDE_VERSION,
   parseArgs,
   expandHome,
   resolvePaths,
   hashText,
   parseNodeMajor,
+  parseKiroIdeVersion,
+  compareDottedVersions,
   buildHookEntry,
   mergeHookFile,
   removeHookEntry,
@@ -942,5 +1076,6 @@ module.exports = {
   mergeManifestEntries,
   detectDrift,
   findOnPath,
+  detectKiroIdeVersion,
   run,
 };

@@ -11,6 +11,7 @@ const path = require("node:path");
 
 const {
   HOOK_NAME,
+  MIN_KIRO_IDE_VERSION,
   parseArgs,
   expandHome,
   resolvePaths,
@@ -22,6 +23,9 @@ const {
   detectDrift,
   findOnPath,
   parseNodeMajor,
+  parseKiroIdeVersion,
+  compareDottedVersions,
+  detectKiroIdeVersion,
   run,
 } = require("./install.js");
 
@@ -64,6 +68,8 @@ async function runInstaller(sandbox, argv = [], overrides = {}) {
     templatePath: TEMPLATE_PATH,
     selfPath: "/repo/extensions/kiro/install.js",
     fetch: overrides.fetch,
+    detectKiroIdeVersion:
+      overrides.detectKiroIdeVersion ?? (() => ({ found: false, path: null, version: null })),
     log: (line) => lines.push(line),
   });
   return { code, output: lines.join("\n"), lines };
@@ -116,6 +122,61 @@ test("parseNodeMajor reads a `node --version` string", () => {
   assert.equal(parseNodeMajor("v18.20.4\n"), 18);
   assert.equal(parseNodeMajor("v22.1.0"), 22);
   assert.equal(parseNodeMajor("not a version"), null);
+});
+
+test("Kiro IDE version helpers parse and compare dotted versions numerically", () => {
+  assert.equal(parseKiroIdeVersion("1.0.182\ncommit\narm64"), "1.0.182");
+  assert.equal(parseKiroIdeVersion("Kiro 1.2.3 (stable)"), "1.2.3");
+  assert.equal(parseKiroIdeVersion("not a version"), null);
+  assert.equal(compareDottedVersions("1.0.181", MIN_KIRO_IDE_VERSION), -1);
+  assert.equal(compareDottedVersions("1.0.182", MIN_KIRO_IDE_VERSION), 0);
+  assert.equal(compareDottedVersions("1.1.0", MIN_KIRO_IDE_VERSION), 1);
+});
+
+test("detectKiroIdeVersion reads the standard macOS application metadata", () => {
+  const calls = [];
+  const result = detectKiroIdeVersion({
+    env: { PATH: "" },
+    homedir: "/Users/dev",
+    platform: "darwin",
+    exists: (candidate) =>
+      candidate === "/Applications/Kiro.app" ||
+      candidate === "/Applications/Kiro.app/Contents/Info.plist",
+    spawn: (command, args) => {
+      calls.push({ command, args });
+      return { status: 0, stdout: "1.0.182\n", stderr: "" };
+    },
+  });
+  assert.deepEqual(result, {
+    found: true,
+    path: "/Applications/Kiro.app",
+    version: "1.0.182",
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, "/usr/bin/plutil");
+  assert.deepEqual(calls[0].args.slice(0, 5), [
+    "-extract",
+    "CFBundleShortVersionString",
+    "raw",
+    "-o",
+    "-",
+  ]);
+});
+
+test("detectKiroIdeVersion falls back to the Kiro shell command", () => {
+  const executable = path.join("/opt", "bin", "kiro");
+  const result = detectKiroIdeVersion({
+    env: { PATH: path.dirname(executable) },
+    homedir: "/home/dev",
+    platform: "linux",
+    exists: (candidate) => candidate === executable,
+    spawn: (command, args) => {
+      assert.equal(command, executable);
+      assert.deepEqual(args, ["--version"]);
+      return { status: 0, stdout: "1.4.0\n", stderr: "" };
+    },
+  });
+  assert.deepEqual(result, { found: true, path: executable, version: "1.4.0" });
 });
 
 test("resolvePaths keeps everything under the injected homedir", () => {
@@ -336,6 +397,36 @@ test("install stages the interceptor, writes one hook file, and records a manife
   }
   assert.match(output, /REQUIRED: Restart Kiro IDE completely/);
   assert.match(output, /empty Agent Hooks panel does not mean the hook is missing/);
+});
+
+test("install warns about a detected Kiro IDE version below the supported minimum", async () => {
+  const sandbox = makeSandbox();
+  const { code, output } = await runInstaller(sandbox, [], {
+    detectKiroIdeVersion: () => ({
+      found: true,
+      path: "/Applications/Kiro.app",
+      version: "0.12.333",
+    }),
+  });
+  assert.equal(code, 0, output);
+  assert.match(output, /Kiro IDE 0\.12\.333.*unsupported/);
+  assert.match(output, /requires Kiro IDE >= 1\.0\.182/);
+  assert.match(output, /this IDE will not be enforced/);
+  assert.equal(fs.existsSync(globalHookPath(sandbox)), true, "CLI V3 installation still proceeds");
+});
+
+test("install accepts a detected supported Kiro IDE version", async () => {
+  const sandbox = makeSandbox();
+  const { code, output } = await runInstaller(sandbox, [], {
+    detectKiroIdeVersion: () => ({
+      found: true,
+      path: "/Applications/Kiro.app",
+      version: MIN_KIRO_IDE_VERSION,
+    }),
+  });
+  assert.equal(code, 0, output);
+  assert.match(output, /Kiro IDE 1\.0\.182: .* \(supported\)/);
+  assert.equal(fs.existsSync(globalHookPath(sandbox)), true);
 });
 
 test("install records a backup when it modifies a pre-existing hook file", async () => {
@@ -631,6 +722,43 @@ test("--check passes when the gate is installed and the PDP answers", async () =
   assert.match(output, /\[PASS\] PDP reachable/);
   assert.match(output, /\[PASS\] PDP accepts checks/);
   assert.match(output, /cannot prove a running Kiro IDE has loaded it/);
+  assert.ok(!/\[FAIL\]/.test(output), output);
+});
+
+test("--check fails when the detected Kiro IDE version is unsupported", async () => {
+  const sandbox = makeSandbox();
+  await runInstaller(sandbox);
+
+  const { code, output } = await runInstaller(sandbox, ["--check"], {
+    env: { DENIED_API_KEY: "dn_test", PATH: process.env.PATH },
+    detectKiroIdeVersion: () => ({
+      found: true,
+      path: "/Applications/Kiro.app",
+      version: "0.12.333",
+    }),
+    fetch: async () => ({ status: 200 }),
+  });
+  assert.equal(code, 1, output);
+  assert.match(output, /\[FAIL\] Kiro IDE version: 0\.12\.333/);
+  assert.match(output, /update to >= 1\.0\.182/);
+  assert.match(output, /Result: NOT enforcing/);
+});
+
+test("--check warns without failing when an IDE is found but its version is unreadable", async () => {
+  const sandbox = makeSandbox();
+  await runInstaller(sandbox);
+
+  const { code, output } = await runInstaller(sandbox, ["--check"], {
+    env: { DENIED_API_KEY: "dn_test", PATH: process.env.PATH },
+    detectKiroIdeVersion: () => ({
+      found: true,
+      path: "/Applications/Kiro.app",
+      version: null,
+    }),
+    fetch: async () => ({ status: 200 }),
+  });
+  assert.equal(code, 0, output);
+  assert.match(output, /\[WARN\] Kiro IDE version: could not determine/);
   assert.ok(!/\[FAIL\]/.test(output), output);
 });
 

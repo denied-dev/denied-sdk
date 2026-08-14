@@ -4,7 +4,7 @@ Kiro can execute powerful tools — shell commands, file edits, web fetches, MCP
 
 ## Prerequisites
 
-- [Kiro IDE](https://kiro.dev) and/or [Kiro CLI V3](https://kiro.dev/docs/cli/v3/) (`kiro-cli --v3`) installed and working
+- [Kiro IDE](https://kiro.dev) **1.0.182 or newer** and/or [Kiro CLI V3](https://kiro.dev/docs/cli/v3/) (`kiro-cli --v3`) installed and working. Older Kiro IDE versions do not load the global v1 hook used by this integration.
 - **Node.js 18+, installed separately.** Unlike our other extensions, Kiro is a native binary — it neither bundles nor requires a Node runtime, so the hook command `node <interceptor>` will not run until you install one. Get it from [nodejs.org](https://nodejs.org/) or `brew install node`. The installer preflights for it and refuses to install without it.
 - A Denied account and API key. Sign up at [app.denied.dev](https://app.denied.dev)
 
@@ -18,7 +18,7 @@ cd denied-sdk
 node extensions/kiro/install.js
 ```
 
-Kiro has no plugin system or marketplace ([#8578](https://github.com/kirodotdev/Kiro/issues/8578)), so the gate is installed by a script rather than by a package manager. The installer stages the interceptor at `~/.denied/kiro/interceptor.js` and registers one hook file at `~/.kiro/hooks/denied.json`. Add `--workspace=.` to also register it in a project's `.kiro/hooks/`.
+Kiro has no plugin system or marketplace ([#8578](https://github.com/kirodotdev/Kiro/issues/8578)), so the gate is installed by a script rather than by a package manager. The installer stages the interceptor at `~/.denied/kiro/interceptor.js` and registers one hook file at `~/.kiro/hooks/denied.json`. Add `--workspace=.` to also register it in a project's `.kiro/hooks/`. When it detects an older Kiro IDE version, it warns that IDE enforcement is unavailable while still allowing installation for Kiro CLI V3.
 
 ### Step 2: Set your API key
 
@@ -50,7 +50,7 @@ Kiro CLI V3 has no such issue: it picks the hook up on the next `kiro-cli --v3` 
 node extensions/kiro/install.js --check
 ```
 
-Each prerequisite is reported as `[PASS]` or `[FAIL]`, and the command exits non-zero if any of them would leave the gate failing open — a mis-wired hook entry, a missing API key, credentials the PDP rejects, or a PDP that is down.
+Each prerequisite is reported as `[PASS]` or `[FAIL]`, and the command exits non-zero if any of them would leave the gate failing open — an unsupported detected Kiro IDE version, a mis-wired hook entry, a missing API key, credentials the PDP rejects, or a PDP that is down.
 
 When a tool call is blocked, the reason is written to stderr:
 
@@ -89,7 +89,8 @@ To install by hand: copy `extensions/kiro/hooks/interceptor.js` somewhere stable
 
 | Surface                                    | Enforced           | Notes                                                          |
 | ------------------------------------------ | ------------------ | -------------------------------------------------------------- |
-| **Kiro IDE**                               | ✅ Yes             | Requires a full IDE restart after install                      |
+| **Kiro IDE >= 1.0.182**                    | ✅ Yes             | Requires a full IDE restart after install                      |
+| **Kiro IDE < 1.0.182**                     | ❌ **Not enforced** | Global v1 hooks are not loaded                                 |
 | **Kiro CLI V3** (`kiro-cli --v3`)          | ✅ Yes             | Global `~/.kiro/hooks/` honoured for the default agent          |
 | **Kiro CLI V2** (plain `kiro-cli chat`)    | ❌ **Not enforced** | Tool calls bypass the gate entirely                            |
 
@@ -211,7 +212,7 @@ Everything the installer writes is recorded in `~/.denied/kiro/install-manifest.
 
 > **`--check` performs a real authorization check.** It POSTs to your PDP with subject and resource id `denied-install-check`, so the probe will appear in your Denied decision logs. Note also what `--check` cannot tell you: it verifies that the hook is registered on disk, not that a currently running Kiro IDE has loaded it.
 
-`--check` prints one `[PASS]`/`[FAIL]` line per condition and exits `1` if any of them failed, because a condition that leaves the gate failing open is not a warning. It fails on: a missing, disabled or mis-wired hook entry (wrong `trigger`, wrong `matcher`, or a `command` that does not run the staged interceptor); a missing staged interceptor; no Node 18+ on `PATH`; no API key in `DENIED_API_KEY` or `~/.denied/config.json`; an unreachable PDP; and **any non-2xx response** from `<url>/pdp/check` — rejected credentials (`401`/`403`), a server error (`5xx`), or anything else, such as the `404` you get when `DENIED_URL` does not point at a Denied PDP. The interceptor treats every non-2xx as an error and resolves it through `failMode`, so only a `2xx` proves the gate can get a decision. Only an all-`[PASS]` run reports that the gate is in place.
+`--check` prints one `[PASS]`/`[FAIL]` line per condition and exits `1` if any of them failed, because a condition that leaves the gate failing open is not a warning. When Kiro IDE is detected, the installer reads its version from the application metadata or the `kiro` shell command; `--check` fails when that version is below `1.0.182`. It also fails on: a missing, disabled or mis-wired hook entry (wrong `trigger`, wrong `matcher`, or a `command` that does not run the staged interceptor); a missing staged interceptor; no Node 18+ on `PATH`; no API key in `DENIED_API_KEY` or `~/.denied/config.json`; an unreachable PDP; and **any non-2xx response** from `<url>/pdp/check` — rejected credentials (`401`/`403`), a server error (`5xx`), or anything else, such as the `404` you get when `DENIED_URL` does not point at a Denied PDP. The interceptor treats every non-2xx as an error and resolves it through `failMode`, so only a `2xx` proves the gate can get a decision. Only an all-`[PASS]` run reports that the gate is in place.
 
 ## Known limitations
 
@@ -229,6 +230,7 @@ Stated plainly, because a security control that overstates its coverage is worse
 | Symptom                                        | Meaning                                        | Fix                                                                                                                                            |
 | ---------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | Hook never fires, tools run freely (IDE)       | You installed while Kiro was running           | **Quit Kiro IDE completely and reopen it.** Hooks load at startup only. Then confirm with `node extensions/kiro/install.js --check`.            |
+| Kiro IDE version is unsupported                | Kiro IDE is older than `1.0.182`                | Update Kiro IDE, then re-run the installer and `--check`.                                                                                        |
 | Agent Hooks panel is empty                     | Not evidence the hook is missing               | Kiro may not re-scan the hooks directory until a filesystem event. Trust `--check` and an actual tool call over the panel.                       |
 | `Blocked tool call: <name>`                    | Policy denied the tool call                    | Working as intended. Create an allow policy in the [Denied dashboard](https://app.denied.dev) if the tool should be permitted.                   |
 | `No API key found`                             | No API key configured                          | Add `apiKey` to `~/.denied/config.json` (recommended). An `export` will not reach IDE hooks.                                                     |
