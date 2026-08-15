@@ -1127,6 +1127,55 @@ test("--check fails an IDE that cannot discover global ~/.kiro/hooks", async () 
   }
 });
 
+test("--check passes a 1.0.0-1.0.181 IDE when a workspace hook was verified", async () => {
+  // Workspace-scoped hooks do load on these builds - it is the stopgap --check
+  // itself recommends - so failing a verified workspace install would make the
+  // tool contradict its own advice.
+  for (const version of ["1.0.0", "1.0.181"]) {
+    const sandbox = makeSandbox();
+    const workspace = path.join(sandbox.root, "project");
+    fs.mkdirSync(workspace, { recursive: true });
+    await runInstaller(sandbox, [`--workspace=${workspace}`]);
+
+    const { code, output } = await runInstaller(sandbox, ["--check", `--workspace=${workspace}`], {
+      detectKiroIde: fakeIde(version),
+      platform: "darwin",
+      env: { DENIED_API_KEY: "dn_test", PATH: process.env.PATH },
+      fetch: async () => ({ status: 200 }),
+    });
+    assert.equal(code, 0, output);
+    assert.match(output, /\[PASS\] hook file \(workspace\)/);
+    assert.match(output, new RegExp(`\\[PASS\\] Kiro IDE version: ${version.replace(/\./g, "\\.")}`));
+    // Neither the condition nor the headline may overstate what a workspace
+    // install buys on a build that loads no global hook.
+    assert.match(output, /that workspace is enforced and every other one is not/);
+    // The summary wraps across log lines, each carrying its own prefix.
+    assert.match(output, /every prerequisite is in place - for the[\s\S]{0,40}workspace checked above/);
+    assert.match(output, /every other[\s\S]{0,40}workspace stays unenforced/);
+    assert.ok(!/\[FAIL\]/.test(output), output);
+  }
+});
+
+test("--check still fails a 1.0.0-1.0.181 IDE with only the global hook installed", async () => {
+  // The workspace carve-out must not leak into a global-only install, which is
+  // exactly the setup those builds never load.
+  const sandbox = makeSandbox();
+  const workspace = path.join(sandbox.root, "project");
+  fs.mkdirSync(workspace, { recursive: true });
+  await runInstaller(sandbox);
+
+  const { code, output } = await runInstaller(sandbox, ["--check", `--workspace=${workspace}`], {
+    detectKiroIde: fakeIde("1.0.181"),
+    platform: "darwin",
+    env: { DENIED_API_KEY: "dn_test", PATH: process.env.PATH },
+    fetch: async () => ({ status: 200 }),
+  });
+  assert.equal(code, 1, output);
+  assert.match(output, /\[FAIL\] hook file \(workspace\): missing/);
+  assert.match(output, /\[FAIL\] Kiro IDE version: 1\.0\.181/);
+  assert.match(output, /--check --workspace=<project>/);
+});
+
 test("--check passes a supported IDE and reports its version", async () => {
   for (const version of ["1.0.182", "1.0.293", "2.1.0"]) {
     const { code, output } = await checkWithIde(fakeIde(version));
@@ -1146,6 +1195,29 @@ test("--check notes rather than fails when no Kiro IDE is installed", async () =
   assert.match(output, /NOTE: Kiro IDE was not found at the known install locations/);
   assert.match(output, /requires Kiro IDE 1\.0\.182 or newer/);
   assert.match(output, /only uses Kiro CLI V3/);
+});
+
+test("--check does not claim every prerequisite when the IDE version is unverified", async () => {
+  // Exiting 0 here is correct (a CLI-only machine has no IDE), but the summary
+  // must not certify a condition that was never evaluated - an unverified
+  // too-old IDE is the exact silent fail-open this command exists to catch.
+  for (const ide of [null, { unreadable: true, appPath: "/Applications/Kiro.app" }]) {
+    const { code, output } = await checkWithIde(ide);
+    assert.equal(code, 0, output);
+    assert.match(output, /every prerequisite that could be verified is/);
+    assert.match(output, /the Kiro IDE version was not one of them/);
+    assert.ok(
+      !/every prerequisite is in place/.test(output),
+      "the unqualified claim is reserved for a run that actually verified the IDE",
+    );
+  }
+});
+
+test("--check claims every prerequisite only when the IDE version was verified", async () => {
+  const { code, output } = await checkWithIde(fakeIde("1.0.293"));
+  assert.equal(code, 0, output);
+  assert.match(output, /Result: the gate is registered and every prerequisite is in place\./);
+  assert.ok(!/could be verified/.test(output), output);
 });
 
 test("--check warns without failing when the IDE version cannot be read", async () => {

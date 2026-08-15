@@ -914,14 +914,26 @@ async function runCheck(ctx) {
 
   // A hook file the IDE never reads is the exact failure --check exists to
   // catch: all-PASS while the gate silently allows everything. A *detected* IDE
-  // below the minimum is a proven fail-open condition, so it fails.
+  // below the minimum is a proven fail-open condition, so it fails - unless a
+  // workspace hook verified in this same run covers it (see below).
   //
   // An *undetected* IDE is deliberately neither PASS nor FAIL: a machine that
   // only runs Kiro CLI V3 legitimately has no IDE on disk, and failing there
   // would train users to ignore --check's verdict. It gets a NOTE instead. (The
   // Kiro CLI versions separately from the IDE, so its version is not gated here.)
   const ide = ctx.detectKiroIde();
+  // Workspace-scoped hooks *do* load on the 1.0.0-1.0.181 builds - that is the
+  // whole reason --workspace is the documented stopgap there. Failing a
+  // workspace install that this same command told the user to perform would
+  // make --check contradict its own advice, so a verified workspace hook turns
+  // that condition into a pass whose text still says global coverage is absent.
+  const workspaceHookRegistered = results.some(
+    (result) => result.ok && result.label === "hook file (workspace)",
+  );
+  let ideVersionVerified = false;
+  let workspaceOnlyCoverage = false;
   if (ide && ide.version) {
+    ideVersionVerified = true;
     const where = describeKiroIdeLocation(ide);
     if (compareVersions(ide.parsed, parseKiroVersion(KIRO_IDE_HOOKS_VERSION)) < 0) {
       record(
@@ -930,10 +942,13 @@ async function runCheck(ctx) {
         `${ide.version} ${where} predates the v1 PreToolUse hooks system (added in Kiro IDE ${KIRO_IDE_HOOKS_VERSION}) - the hook file is silently ignored and this gate can never fire; upgrade Kiro IDE to ${MIN_KIRO_IDE_VERSION} or newer (https://kiro.dev/downloads)`,
       );
     } else if (compareVersions(ide.parsed, parseKiroVersion(MIN_KIRO_IDE_VERSION)) < 0) {
+      workspaceOnlyCoverage = workspaceHookRegistered;
       record(
-        false,
+        workspaceHookRegistered,
         "Kiro IDE version",
-        `${ide.version} ${where} does not discover user-level global ~/.kiro/hooks/ (kirodotdev/Kiro#9075, fixed in ${MIN_KIRO_IDE_VERSION}) - the globally-registered hook never loads; upgrade Kiro IDE (https://kiro.dev/downloads), or as a stopgap re-run the installer with --workspace=<project> for every workspace (workspace-scoped hooks do load on these builds)`,
+        workspaceHookRegistered
+          ? `${ide.version} ${where} does not discover user-level global ~/.kiro/hooks/ (kirodotdev/Kiro#9075, fixed in ${MIN_KIRO_IDE_VERSION}), but the workspace hook checked above does load on these builds - that workspace is enforced and every other one is not, so re-run the installer with --workspace=<project> for every workspace, or upgrade Kiro IDE for global coverage (https://kiro.dev/downloads)`
+          : `${ide.version} ${where} does not discover user-level global ~/.kiro/hooks/ (kirodotdev/Kiro#9075, fixed in ${MIN_KIRO_IDE_VERSION}) - the globally-registered hook never loads; upgrade Kiro IDE (https://kiro.dev/downloads), or as a stopgap re-run the installer with --workspace=<project> for every workspace (workspace-scoped hooks do load on these builds) and verify it with --check --workspace=<project>`,
       );
     } else {
       record(
@@ -1024,7 +1039,26 @@ async function runCheck(ctx) {
   const failed = results.filter((result) => !result.ok);
   ctx.blank();
   if (failed.length === 0) {
-    ctx.out("Result: the gate is registered and every prerequisite is in place.");
+    // "Every prerequisite" must mean every prerequisite. When the IDE version
+    // could not be read, the one condition that catches a silently-ignored hook
+    // file went unverified, and a summary that glosses over that is the same
+    // overclaim --check exists to prevent.
+    if (ideVersionVerified && workspaceOnlyCoverage) {
+      // An all-PASS run on a build that loads no global hook is real, but it is
+      // one workspace wide. Saying so here keeps the headline as narrow as the
+      // guarantee.
+      ctx.out("Result: the gate is registered and every prerequisite is in place - for the");
+      ctx.out("  workspace checked above. This Kiro IDE build loads no global hook, so every other");
+      ctx.out(`  workspace stays unenforced until you install there too or upgrade to ${MIN_KIRO_IDE_VERSION}.`);
+    } else if (ideVersionVerified) {
+      ctx.out("Result: the gate is registered and every prerequisite is in place.");
+    } else {
+      ctx.out("Result: the gate is registered and every prerequisite that could be verified is");
+      ctx.out("  in place - but the Kiro IDE version was not one of them (see above). If you use");
+      ctx.out(`  Kiro IDE on this machine, confirm it is ${MIN_KIRO_IDE_VERSION} or newer by hand (Kiro IDE ->`);
+      ctx.out("  About): an older build accepts the hook file and never fires it. Kiro CLI V3 is");
+      ctx.out("  unaffected by the IDE version.");
+    }
     ctx.out("  This cannot prove a running Kiro IDE has loaded it - hooks register at");
     ctx.out("  startup only, so restart the IDE if you installed while it was open.");
     return 0;
