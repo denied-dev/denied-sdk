@@ -22,6 +22,14 @@ const {
   detectDrift,
   findOnPath,
   parseNodeMajor,
+  parseKiroVersion,
+  compareVersions,
+  kiroIdeAppCandidates,
+  detectKiroIdeVersion,
+  detectKiroIde,
+  parseKiroVersionOutput,
+  MIN_KIRO_IDE_VERSION,
+  KIRO_IDE_HOOKS_VERSION,
   run,
 } = require("./install.js");
 
@@ -52,21 +60,31 @@ function makeSandbox() {
   return { root, homedir, source, interceptorSource };
 }
 
+// IDE detection reads absolute system paths (/Applications/Kiro.app and
+// friends) that a temp sandbox cannot isolate, so every run injects a detection
+// result. `null` (no IDE found) is the hermetic default; tests that care about
+// the version condition pass their own.
 async function runInstaller(sandbox, argv = [], overrides = {}) {
   const lines = [];
   const code = await run({
     argv,
     homedir: sandbox.homedir,
     cwd: sandbox.root,
+    platform: overrides.platform ?? "linux",
     env: { PATH: process.env.PATH, ...(overrides.env ?? {}) },
     now: overrides.now ?? Date.UTC(2026, 7, 4, 12, 0, 0),
     interceptorSource: overrides.interceptorSource ?? sandbox.interceptorSource,
     templatePath: TEMPLATE_PATH,
     selfPath: "/repo/extensions/kiro/install.js",
     fetch: overrides.fetch,
+    detectKiroIde: "detectKiroIde" in overrides ? overrides.detectKiroIde : null,
     log: (line) => lines.push(line),
   });
   return { code, output: lines.join("\n"), lines };
+}
+
+function fakeIde(version, appPath = "/Applications/Kiro.app") {
+  return { version, parsed: parseKiroVersion(version), appPath };
 }
 
 function globalHookPath(sandbox) {
@@ -116,6 +134,272 @@ test("parseNodeMajor reads a `node --version` string", () => {
   assert.equal(parseNodeMajor("v18.20.4\n"), 18);
   assert.equal(parseNodeMajor("v22.1.0"), 22);
   assert.equal(parseNodeMajor("not a version"), null);
+});
+
+// ---------------------------------------------------------------------------
+// Kiro IDE version detection
+// ---------------------------------------------------------------------------
+
+test("parseKiroVersion reads the IDE's package.json version field", () => {
+  assert.deepEqual(parseKiroVersion("1.0.293"), [1, 0, 293]);
+  assert.deepEqual(parseKiroVersion("  0.12.333\n"), [0, 12, 333]);
+  assert.deepEqual(parseKiroVersion("1.0"), [1, 0, 0], "a two-part version means patch 0");
+  assert.equal(parseKiroVersion("not.a.version"), null);
+  assert.equal(parseKiroVersion(""), null);
+  assert.equal(parseKiroVersion(undefined), null);
+  assert.equal(parseKiroVersion(null), null);
+  assert.equal(parseKiroVersion({ version: "1.0.0" }), null);
+});
+
+test("compareVersions orders the versions the gate depends on", () => {
+  const min = parseKiroVersion(MIN_KIRO_IDE_VERSION);
+  const hooks = parseKiroVersion(KIRO_IDE_HOOKS_VERSION);
+  assert.ok(compareVersions(parseKiroVersion("0.12.333"), hooks) < 0);
+  assert.ok(compareVersions(parseKiroVersion("1.0.0"), hooks) === 0);
+  assert.ok(compareVersions(parseKiroVersion("1.0.181"), min) < 0);
+  assert.ok(compareVersions(parseKiroVersion("1.0.182"), min) === 0);
+  assert.ok(compareVersions(parseKiroVersion("1.0.293"), min) > 0);
+  assert.ok(compareVersions(parseKiroVersion("2.0.0"), parseKiroVersion("1.99.99")) > 0);
+  assert.equal(compareVersions(parseKiroVersion("1.0"), parseKiroVersion("1.0.0")), 0);
+});
+
+test("kiroIdeAppCandidates covers the stock install locations per platform", () => {
+  const darwin = kiroIdeAppCandidates({ platform: "darwin", homedir: "/Users/dev", env: {} });
+  assert.deepEqual(
+    darwin.map((candidate) => candidate.packageJsonPath),
+    [
+      "/Applications/Kiro.app/Contents/Resources/app/package.json",
+      "/Users/dev/Applications/Kiro.app/Contents/Resources/app/package.json",
+    ],
+  );
+  assert.equal(darwin[0].appPath, "/Applications/Kiro.app");
+
+  const linux = kiroIdeAppCandidates({ platform: "linux", homedir: "/home/dev", env: {} });
+  assert.deepEqual(
+    linux.map((candidate) => candidate.packageJsonPath),
+    [
+      "/usr/share/kiro/resources/app/package.json",
+      "/opt/Kiro/resources/app/package.json",
+    ],
+  );
+
+  const win = kiroIdeAppCandidates({
+    platform: "win32",
+    homedir: "C:\\Users\\dev",
+    env: { LOCALAPPDATA: "C:\\Users\\dev\\AppData\\Local", ProgramFiles: "C:\\Program Files" },
+  });
+  assert.deepEqual(
+    win.map((candidate) => candidate.packageJsonPath),
+    [
+      path.join("C:\\Users\\dev\\AppData\\Local", "Programs", "Kiro", "resources", "app", "package.json"),
+      path.join("C:\\Program Files", "Kiro", "resources", "app", "package.json"),
+    ],
+  );
+});
+
+test("kiroIdeAppCandidates skips Windows candidates whose env var is unset", () => {
+  assert.deepEqual(kiroIdeAppCandidates({ platform: "win32", homedir: "C:\\", env: {} }), []);
+  const onlyProgramFiles = kiroIdeAppCandidates({
+    platform: "win32",
+    homedir: "C:\\",
+    env: { ProgramFiles: "C:\\Program Files" },
+  });
+  assert.equal(onlyProgramFiles.length, 1);
+  assert.match(onlyProgramFiles[0].packageJsonPath, /Program Files/);
+});
+
+test("detectKiroIdeVersion reads the version from the first usable candidate", () => {
+  const files = {
+    "/Applications/Kiro.app/Contents/Resources/app/package.json": '{"name":"kiro","version":"1.0.293"}',
+    "/Users/dev/Applications/Kiro.app/Contents/Resources/app/package.json": '{"version":"0.9.0"}',
+  };
+  assert.deepEqual(
+    detectKiroIdeVersion({
+      platform: "darwin",
+      homedir: "/Users/dev",
+      env: {},
+      readFile: (file) => files[file] ?? null,
+    }),
+    {
+      version: "1.0.293",
+      parsed: [1, 0, 293],
+      source: "app",
+      appPath: "/Applications/Kiro.app",
+    },
+  );
+});
+
+test("detectKiroIdeVersion skips a malformed candidate in favour of a later one", () => {
+  const readFile = (file) => {
+    if (file === "/usr/share/kiro/resources/app/package.json") return "{ not json";
+    if (file === "/opt/Kiro/resources/app/package.json") return '{"version":"1.0.182"}';
+    return null;
+  };
+  assert.deepEqual(
+    detectKiroIdeVersion({ platform: "linux", homedir: "/home/dev", env: {}, readFile }),
+    { version: "1.0.182", parsed: [1, 0, 182], source: "app", appPath: "/opt/Kiro" },
+  );
+});
+
+test("detectKiroIdeVersion reports a found-but-unreadable bundle distinctly", () => {
+  // Present on disk with an unusable version field: reporting this as "no IDE
+  // installed" would hide an IDE whose compatibility is genuinely unknown.
+  assert.deepEqual(
+    detectKiroIdeVersion({
+      platform: "linux",
+      homedir: "/home/dev",
+      env: {},
+      readFile: (file) =>
+        file === "/usr/share/kiro/resources/app/package.json" ? '{"name":"kiro"}' : null,
+    }),
+    { unreadable: true, appPath: "/usr/share/kiro" },
+  );
+
+  // Same for package.json text that is not JSON at all.
+  assert.deepEqual(
+    detectKiroIdeVersion({
+      platform: "linux",
+      homedir: "/home/dev",
+      env: {},
+      readFile: (file) =>
+        file === "/opt/Kiro/resources/app/package.json" ? "{ not json" : null,
+    }),
+    { unreadable: true, appPath: "/opt/Kiro" },
+  );
+});
+
+test("detectKiroIdeVersion prefers a later usable candidate over an unreadable one", () => {
+  assert.deepEqual(
+    detectKiroIdeVersion({
+      platform: "linux",
+      homedir: "/home/dev",
+      env: {},
+      readFile: (file) => {
+        if (file === "/usr/share/kiro/resources/app/package.json") return '{"name":"kiro"}';
+        if (file === "/opt/Kiro/resources/app/package.json") return '{"version":"1.0.200"}';
+        return null;
+      },
+    }),
+    { version: "1.0.200", parsed: [1, 0, 200], source: "app", appPath: "/opt/Kiro" },
+    "unreadable must not win when a real version is available",
+  );
+});
+
+test("detectKiroIdeVersion returns null when no Kiro IDE is installed", () => {
+  assert.equal(
+    detectKiroIdeVersion({
+      platform: "darwin",
+      homedir: "/Users/dev",
+      env: {},
+      readFile: () => null,
+    }),
+    null,
+  );
+});
+
+test("parseKiroVersionOutput reads a line that is exactly a version", () => {
+  assert.equal(parseKiroVersionOutput("1.0.293\n"), "1.0.293");
+  assert.equal(parseKiroVersionOutput("v1.0.293"), "1.0.293");
+  assert.equal(parseKiroVersionOutput("  1.0  \n"), "1.0");
+});
+
+test("parseKiroVersionOutput anchors on the line start among noise", () => {
+  const output = ["Kiro", "1.0.293", "a1b2c3d4", "x64"].join("\n");
+  assert.equal(parseKiroVersionOutput(output), "1.0.293");
+  assert.equal(
+    parseKiroVersionOutput("1.0.293 (a1b2c3d4, x64)\ncommit a1b2c3d4\n"),
+    "1.0.293",
+    "a version-led line still matches when the line carries a suffix",
+  );
+});
+
+test("parseKiroVersionOutput ignores embedded versions from the VS Code fork base", () => {
+  // A fork's --version prints Electron and VS Code base versions too; a global
+  // "any digit triple" scan would happily report Electron's as the IDE's.
+  const output = [
+    "Kiro IDE built on Code 1.94.2",
+    "1.0.293",
+    "Electron 32.2.6",
+    "Chromium 128.0.6613.186",
+  ].join("\n");
+  assert.equal(parseKiroVersionOutput(output), "1.0.293");
+});
+
+test("parseKiroVersionOutput returns null when nothing looks like a version", () => {
+  assert.equal(parseKiroVersionOutput("kiro: command failed\n"), null);
+  assert.equal(parseKiroVersionOutput(""), null);
+  assert.equal(parseKiroVersionOutput(null), null);
+  assert.equal(parseKiroVersionOutput(undefined), null);
+});
+
+test("detectKiroIde falls back to `kiro --version` on PATH", () => {
+  // The stock-path gap: a custom install location has no readable bundle, but
+  // the `kiro` shim on PATH can still answer.
+  const calls = [];
+  assert.deepEqual(
+    detectKiroIde({
+      platform: "linux",
+      homedir: "/home/dev",
+      env: { PATH: "/usr/local/bin" },
+      readFile: () => null,
+      exists: (candidate) => candidate === "/usr/local/bin/kiro",
+      runVersion: (executable) => {
+        calls.push(executable);
+        return "1.0.293\n";
+      },
+    }),
+    { version: "1.0.293", parsed: [1, 0, 293], source: "path", executable: "/usr/local/bin/kiro" },
+  );
+  assert.deepEqual(calls, ["/usr/local/bin/kiro"]);
+});
+
+test("detectKiroIde prefers the application bundle over the PATH fallback", () => {
+  let ran = false;
+  assert.deepEqual(
+    detectKiroIde({
+      platform: "linux",
+      homedir: "/home/dev",
+      env: { PATH: "/usr/local/bin" },
+      readFile: (file) =>
+        file === "/opt/Kiro/resources/app/package.json" ? '{"version":"1.0.293"}' : null,
+      exists: () => true,
+      runVersion: () => {
+        ran = true;
+        return "9.9.9";
+      },
+    }),
+    { version: "1.0.293", parsed: [1, 0, 293], source: "app", appPath: "/opt/Kiro" },
+  );
+  assert.equal(ran, false, "no subprocess is spawned when the bundle answers");
+});
+
+test("detectKiroIde keeps the unreadable state when the PATH fallback fails too", () => {
+  assert.deepEqual(
+    detectKiroIde({
+      platform: "linux",
+      homedir: "/home/dev",
+      env: { PATH: "/usr/local/bin" },
+      readFile: (file) =>
+        file === "/opt/Kiro/resources/app/package.json" ? '{"name":"kiro"}' : null,
+      exists: () => true,
+      runVersion: () => "kiro: unknown option --version\n",
+    }),
+    { unreadable: true, appPath: "/opt/Kiro" },
+  );
+});
+
+test("detectKiroIde returns null when neither the bundle nor PATH knows Kiro", () => {
+  assert.equal(
+    detectKiroIde({
+      platform: "linux",
+      homedir: "/home/dev",
+      env: { PATH: "/usr/local/bin" },
+      readFile: () => null,
+      exists: () => false,
+      runVersion: () => "1.0.293",
+    }),
+    null,
+  );
 });
 
 test("resolvePaths keeps everything under the injected homedir", () => {
@@ -801,6 +1085,290 @@ test("--check fails a hook entry that is present but disabled", async () => {
   });
   assert.equal(code, 1);
   assert.match(output, /present but disabled/);
+});
+
+// ---------------------------------------------------------------------------
+// --check: the Kiro IDE version condition
+//
+// An all-PASS --check on an IDE that silently ignores the hook file is the
+// exact failure this condition exists to prevent.
+// ---------------------------------------------------------------------------
+
+async function checkWithIde(detectKiroIde) {
+  const sandbox = makeSandbox();
+  await runInstaller(sandbox);
+  return runInstaller(sandbox, ["--check"], {
+    detectKiroIde,
+    platform: "darwin",
+    env: { DENIED_API_KEY: "dn_test", PATH: process.env.PATH },
+    fetch: async () => ({ status: 200 }),
+  });
+}
+
+test("--check fails an IDE that predates the v1 PreToolUse hooks system", async () => {
+  const { code, output } = await checkWithIde(fakeIde("0.12.333"));
+  assert.equal(code, 1, output);
+  assert.match(output, /\[FAIL\] Kiro IDE version: 0\.12\.333 at \/Applications\/Kiro\.app/);
+  assert.match(output, /predates the v1 PreToolUse hooks system \(added in Kiro IDE 1\.0\.0\)/);
+  assert.match(output, /silently ignored and this gate can never fire/);
+  assert.match(output, /kiro\.dev\/downloads/);
+  assert.match(output, /NOT enforcing/);
+});
+
+test("--check fails an IDE that cannot discover global ~/.kiro/hooks", async () => {
+  for (const version of ["1.0.0", "1.0.181"]) {
+    const { code, output } = await checkWithIde(fakeIde(version));
+    assert.equal(code, 1, output);
+    assert.match(output, new RegExp(`\\[FAIL\\] Kiro IDE version: ${version.replace(/\./g, "\\.")}`));
+    assert.match(output, /does not discover user-level global ~\/\.kiro\/hooks\//);
+    assert.match(output, /kirodotdev\/Kiro#9075, fixed in 1\.0\.182/);
+    assert.match(output, /--workspace=<project> for every workspace/);
+    assert.match(output, /NOT enforcing/);
+  }
+});
+
+test("--check passes a 1.0.0-1.0.181 IDE when a workspace hook was verified", async () => {
+  // Workspace-scoped hooks do load on these builds - it is the stopgap --check
+  // itself recommends - so failing a verified workspace install would make the
+  // tool contradict its own advice.
+  for (const version of ["1.0.0", "1.0.181"]) {
+    const sandbox = makeSandbox();
+    const workspace = path.join(sandbox.root, "project");
+    fs.mkdirSync(workspace, { recursive: true });
+    await runInstaller(sandbox, [`--workspace=${workspace}`]);
+
+    const { code, output } = await runInstaller(sandbox, ["--check", `--workspace=${workspace}`], {
+      detectKiroIde: fakeIde(version),
+      platform: "darwin",
+      env: { DENIED_API_KEY: "dn_test", PATH: process.env.PATH },
+      fetch: async () => ({ status: 200 }),
+    });
+    assert.equal(code, 0, output);
+    assert.match(output, /\[PASS\] hook file \(workspace\)/);
+    assert.match(output, new RegExp(`\\[PASS\\] Kiro IDE version: ${version.replace(/\./g, "\\.")}`));
+    // Neither the condition nor the headline may overstate what a workspace
+    // install buys on a build that loads no global hook.
+    assert.match(output, /that workspace is enforced and every other one is not/);
+    // The summary wraps across log lines, each carrying its own prefix.
+    assert.match(output, /every prerequisite is in place - for the[\s\S]{0,40}workspace checked above/);
+    assert.match(output, /every other[\s\S]{0,40}workspace stays unenforced/);
+    assert.ok(!/\[FAIL\]/.test(output), output);
+  }
+});
+
+test("--check still fails a 1.0.0-1.0.181 IDE with only the global hook installed", async () => {
+  // The workspace carve-out must not leak into a global-only install, which is
+  // exactly the setup those builds never load.
+  const sandbox = makeSandbox();
+  const workspace = path.join(sandbox.root, "project");
+  fs.mkdirSync(workspace, { recursive: true });
+  await runInstaller(sandbox);
+
+  const { code, output } = await runInstaller(sandbox, ["--check", `--workspace=${workspace}`], {
+    detectKiroIde: fakeIde("1.0.181"),
+    platform: "darwin",
+    env: { DENIED_API_KEY: "dn_test", PATH: process.env.PATH },
+    fetch: async () => ({ status: 200 }),
+  });
+  assert.equal(code, 1, output);
+  assert.match(output, /\[FAIL\] hook file \(workspace\): missing/);
+  assert.match(output, /\[FAIL\] Kiro IDE version: 1\.0\.181/);
+  assert.match(output, /--check --workspace=<project>/);
+});
+
+test("--check passes a supported IDE and reports its version", async () => {
+  for (const version of ["1.0.182", "1.0.293", "2.1.0"]) {
+    const { code, output } = await checkWithIde(fakeIde(version));
+    assert.equal(code, 0, output);
+    assert.match(output, new RegExp(`\\[PASS\\] Kiro IDE version: ${version.replace(/\./g, "\\.")} at /Applications/Kiro\\.app`));
+    assert.ok(!/\[FAIL\]/.test(output), output);
+  }
+});
+
+test("--check notes rather than fails when no Kiro IDE is installed", async () => {
+  // A CLI-V3-only machine legitimately has no IDE on disk; failing there would
+  // train users to ignore --check's verdict.
+  const { code, output } = await checkWithIde(null);
+  assert.equal(code, 0, output);
+  assert.ok(!/\[FAIL\] Kiro IDE version/.test(output));
+  assert.ok(!/\[PASS\] Kiro IDE version/.test(output));
+  assert.match(output, /NOTE: Kiro IDE was not found at the known install locations/);
+  assert.match(output, /requires Kiro IDE 1\.0\.182 or newer/);
+  assert.match(output, /only uses Kiro CLI V3/);
+});
+
+test("--check does not claim every prerequisite when the IDE version is unverified", async () => {
+  // Exiting 0 here is correct (a CLI-only machine has no IDE), but the summary
+  // must not certify a condition that was never evaluated - an unverified
+  // too-old IDE is the exact silent fail-open this command exists to catch.
+  for (const ide of [null, { unreadable: true, appPath: "/Applications/Kiro.app" }]) {
+    const { code, output } = await checkWithIde(ide);
+    assert.equal(code, 0, output);
+    assert.match(output, /every prerequisite that could be verified is/);
+    assert.match(output, /the Kiro IDE version was not one of them/);
+    assert.ok(
+      !/every prerequisite is in place/.test(output),
+      "the unqualified claim is reserved for a run that actually verified the IDE",
+    );
+  }
+});
+
+test("--check claims every prerequisite only when the IDE version was verified", async () => {
+  const { code, output } = await checkWithIde(fakeIde("1.0.293"));
+  assert.equal(code, 0, output);
+  assert.match(output, /Result: the gate is registered and every prerequisite is in place\./);
+  assert.ok(!/could be verified/.test(output), output);
+});
+
+test("--check warns without failing when the IDE version cannot be read", async () => {
+  const { code, output } = await checkWithIde({
+    unreadable: true,
+    appPath: "/Applications/Kiro.app",
+  });
+  assert.equal(code, 0, output);
+  assert.ok(!/\[FAIL\]/.test(output), output);
+  assert.ok(!/\[PASS\] Kiro IDE version/.test(output));
+  assert.match(
+    output,
+    /\[WARN\] Kiro IDE version: Kiro IDE was found at \/Applications\/Kiro\.app, but its version could not be determined/,
+  );
+  assert.match(output, /compatibility with this gate was not checked/);
+  assert.match(output, /Verify by hand that it is 1\.0\.182 or newer/);
+  assert.ok(
+    !/NOTE: Kiro IDE was not found/.test(output),
+    "a bundle on disk is not the same as no IDE at all",
+  );
+});
+
+test("--check names the PATH fallback as the source of the version", async () => {
+  const { code, output } = await checkWithIde({
+    version: "1.0.293",
+    parsed: parseKiroVersion("1.0.293"),
+    source: "path",
+    executable: "/usr/local/bin/kiro",
+  });
+  assert.equal(code, 0, output);
+  assert.match(
+    output,
+    /\[PASS\] Kiro IDE version: 1\.0\.293 via kiro --version at \/usr\/local\/bin\/kiro/,
+  );
+});
+
+test("--check wires up the real IDE detection by default", async () => {
+  // Exercises the default (uninjected) path against a fake app bundle inside the
+  // sandbox, reached by pointing the win32 candidate's env var at it.
+  const sandbox = makeSandbox();
+  const localAppData = path.join(sandbox.root, "AppData", "Local");
+  const appDir = path.join(localAppData, "Programs", "Kiro");
+  fs.mkdirSync(path.join(appDir, "resources", "app"), { recursive: true });
+  fs.writeFileSync(
+    path.join(appDir, "resources", "app", "package.json"),
+    '{"name":"kiro","version":"1.0.100"}\n',
+  );
+
+  const lines = [];
+  const code = await run({
+    argv: ["--check"],
+    homedir: sandbox.homedir,
+    cwd: sandbox.root,
+    platform: "win32",
+    env: { PATH: process.env.PATH, LOCALAPPDATA: localAppData, DENIED_API_KEY: "dn_test" },
+    templatePath: TEMPLATE_PATH,
+    selfPath: "/repo/extensions/kiro/install.js",
+    fetch: async () => ({ status: 200 }),
+    log: (line) => lines.push(line),
+  });
+  const output = lines.join("\n");
+  assert.equal(code, 1, output);
+  assert.match(output, /\[FAIL\] Kiro IDE version: 1\.0\.100/);
+});
+
+// ---------------------------------------------------------------------------
+// Install: the too-old-IDE warning never blocks the install
+// ---------------------------------------------------------------------------
+
+test("install warns about an unsupported Kiro IDE but still installs", async () => {
+  const sandbox = makeSandbox();
+  const { code, output } = await runInstaller(sandbox, [], {
+    platform: "darwin",
+    detectKiroIde: fakeIde("1.0.100"),
+  });
+  assert.equal(code, 0, output);
+  assert.match(output, /Kiro IDE application: 1\.0\.100 at \/Applications\/Kiro\.app/);
+  assert.match(output, /WARNING: this Kiro IDE build cannot load the Denied hook/);
+  assert.match(output, /kirodotdev\/Kiro#9075/);
+  assert.match(output, /--workspace=<project>/);
+  assert.match(output, /Upgrade Kiro IDE to 1\.0\.182 or newer/);
+  assert.equal(fs.existsSync(globalHookPath(sandbox)), true, "the install still proceeds");
+});
+
+test("install explains the missing hooks feature on a pre-1.0 IDE", async () => {
+  const sandbox = makeSandbox();
+  const { code, output } = await runInstaller(sandbox, [], {
+    platform: "darwin",
+    detectKiroIde: fakeIde("0.12.333"),
+  });
+  assert.equal(code, 0, output);
+  assert.match(output, /Builds before 1\.0\.0 have no v1 PreToolUse hooks system at all/);
+  assert.ok(!/#9075/.test(output), "the pre-1.0 case is a different failure than #9075");
+});
+
+test("install says nothing about the IDE version when the build is supported", async () => {
+  const sandbox = makeSandbox();
+  const { code, output } = await runInstaller(sandbox, [], {
+    platform: "darwin",
+    detectKiroIde: fakeIde("1.0.293"),
+  });
+  assert.equal(code, 0, output);
+  assert.match(output, /Kiro IDE application: 1\.0\.293 at \/Applications\/Kiro\.app \(supported\)/);
+  assert.ok(!/cannot load the Denied hook/.test(output));
+});
+
+test("the install preflight spells out the verdict on an unsupported IDE", async () => {
+  const sandbox = makeSandbox();
+  const { output } = await runInstaller(sandbox, [], {
+    platform: "darwin",
+    detectKiroIde: fakeIde("1.0.100"),
+  });
+  assert.match(
+    output,
+    /Kiro IDE application: 1\.0\.100 at \/Applications\/Kiro\.app \(unsupported - need >= 1\.0\.182\)/,
+  );
+});
+
+test("the install preflight names the PATH fallback as the source", async () => {
+  const sandbox = makeSandbox();
+  const { output } = await runInstaller(sandbox, [], {
+    platform: "linux",
+    detectKiroIde: {
+      version: "1.0.293",
+      parsed: parseKiroVersion("1.0.293"),
+      source: "path",
+      executable: "/usr/local/bin/kiro",
+    },
+  });
+  assert.match(
+    output,
+    /Kiro IDE application: 1\.0\.293 via kiro --version at \/usr\/local\/bin\/kiro \(supported\)/,
+  );
+});
+
+test("the install preflight flags a found-but-unreadable IDE distinctly", async () => {
+  const sandbox = makeSandbox();
+  const { code, output } = await runInstaller(sandbox, [], {
+    platform: "darwin",
+    detectKiroIde: { unreadable: true, appPath: "/Applications/Kiro.app" },
+  });
+  assert.equal(code, 0, output);
+  assert.match(
+    output,
+    /Kiro IDE application: found at \/Applications\/Kiro\.app, but its version could not be determined \(verify by hand that it is >= 1\.0\.182\)/,
+  );
+  assert.ok(
+    !/cannot load the Denied hook/.test(output),
+    "an unknown version is not evidence of an unsupported build",
+  );
+  assert.ok(!/not found/.test(output));
 });
 
 // ---------------------------------------------------------------------------

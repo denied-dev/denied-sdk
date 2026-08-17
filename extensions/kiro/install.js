@@ -31,9 +31,19 @@ const INTERCEPTOR_PLACEHOLDER = "__DENIED_INTERCEPTOR_PATH__";
 // installs may have left one behind; --check reports them and --uninstall removes them.
 const LEGACY_HOOK_PATTERN = /^denied.*\.kiro\.hook$/i;
 const MIN_NODE_MAJOR = 18;
+// Kiro IDE 1.0.0 (2026-06-25) introduced the v1 PreToolUse hooks system; before
+// that release the hook file is simply not a thing the IDE reads. Global
+// (user-level) ~/.kiro/hooks/ discovery was then broken until 1.0.182
+// (2026-07-20, kirodotdev/Kiro#9075), so a build in between registers nothing
+// from the file this installer writes. Both cases are silent fail-open.
+const MIN_KIRO_IDE_VERSION = "1.0.182";
+const KIRO_IDE_HOOKS_VERSION = "1.0.0";
 const MANIFEST_VERSION = 1;
 const DEFAULT_URL = "https://api.denied.dev";
 const PROBE_TIMEOUT_MS = 5_000;
+// `kiro --version` on a fork can be slow to start; bounded so a wedged binary
+// cannot hang the installer.
+const KIRO_VERSION_TIMEOUT_MS = 5_000;
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 
@@ -116,6 +126,150 @@ function hashText(text) {
 function parseNodeMajor(versionText) {
   const match = /v?(\d+)\./.exec(String(versionText).trim());
   return match ? Number.parseInt(match[1], 10) : null;
+}
+
+// "1.0.293" -> [1, 0, 293]. A two-part "1.0" parses as [1, 0, 0]; anything
+// non-numeric is null so callers can distinguish "too old" from "unknown".
+function parseKiroVersion(text) {
+  if (typeof text !== "string" && typeof text !== "number") return null;
+  const match = /^(\d+)\.(\d+)(?:\.(\d+))?/.exec(String(text).trim());
+  if (!match) return null;
+  return [
+    Number.parseInt(match[1], 10),
+    Number.parseInt(match[2], 10),
+    match[3] === undefined ? 0 : Number.parseInt(match[3], 10),
+  ];
+}
+
+function compareVersions(a, b) {
+  const left = a ?? [];
+  const right = b ?? [];
+  for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+    const diff = (left[i] ?? 0) - (right[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+// Kiro is a VS Code fork, so the IDE version lives in the `version` field of
+// resources/app/package.json inside the application bundle (verified against a
+// real 1.0.293 install). These are the stock install locations per platform.
+function kiroIdeAppCandidates({ platform, homedir, env = {} }) {
+  const bundle = (appPath, ...inner) => ({
+    appPath,
+    packageJsonPath: path.join(appPath, ...inner, "package.json"),
+  });
+
+  if (platform === "darwin") {
+    return [
+      bundle("/Applications/Kiro.app", "Contents", "Resources", "app"),
+      bundle(path.join(homedir, "Applications", "Kiro.app"), "Contents", "Resources", "app"),
+    ];
+  }
+  if (platform === "win32") {
+    const candidates = [];
+    // "User setup" installs land in LOCALAPPDATA; "system setup" in ProgramFiles.
+    if (env.LOCALAPPDATA) {
+      candidates.push(
+        bundle(path.join(env.LOCALAPPDATA, "Programs", "Kiro"), "resources", "app"),
+      );
+    }
+    if (env["ProgramFiles"]) {
+      candidates.push(bundle(path.join(env["ProgramFiles"], "Kiro"), "resources", "app"));
+    }
+    return candidates;
+  }
+  return [
+    bundle("/usr/share/kiro", "resources", "app"),
+    bundle("/opt/Kiro", "resources", "app"),
+  ];
+}
+
+// `readFile` returns the file's text or null (same contract as readTextOrNull),
+// which keeps this pure and testable without touching the real filesystem. A
+// candidate that exists but is malformed is skipped in favour of later ones;
+// if *no* candidate yields a version but at least one had readable package.json
+// text, the result is the distinct `{ unreadable: true, appPath }` state - an
+// IDE that is demonstrably installed but whose compatibility is unknown must
+// not be reported as "not installed".
+function detectKiroIdeVersion({ platform, homedir, env, readFile }) {
+  let unreadable = null;
+  const noteUnreadable = (appPath) => {
+    if (!unreadable) unreadable = { unreadable: true, appPath };
+  };
+
+  for (const candidate of kiroIdeAppCandidates({ platform, homedir, env })) {
+    const raw = readFile(candidate.packageJsonPath);
+    if (raw === null || raw === undefined) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      noteUnreadable(candidate.appPath);
+      continue;
+    }
+    const version = parsed && typeof parsed === "object" ? parsed.version : null;
+    const numeric = parseKiroVersion(version);
+    if (!numeric) {
+      noteUnreadable(candidate.appPath);
+      continue;
+    }
+    return {
+      version: String(version).trim(),
+      parsed: numeric,
+      source: "app",
+      appPath: candidate.appPath,
+    };
+  }
+  return unreadable;
+}
+
+// Parses `kiro --version` output. Deliberately line-anchored rather than a
+// global scan for any digit triple: Kiro is a VS Code fork, and a fork's
+// --version routinely prints the Electron and VS Code base versions (and a
+// commit hash) on their own lines, so a loose scan can happily report Electron's
+// version as the IDE's. First pass: a line that is exactly a version. Second
+// pass: the first line that *starts* with a version triple.
+function parseKiroVersionOutput(text) {
+  if (typeof text !== "string") return null;
+  const lines = text.split(/\r?\n/).map((line) => line.trim());
+  for (const line of lines) {
+    const exact = /^v?(\d+\.\d+(?:\.\d+)?)$/.exec(line);
+    if (exact) return exact[1];
+  }
+  for (const line of lines) {
+    const leading = /^v?(\d+\.\d+\.\d+)\b/.exec(line);
+    if (leading) return leading[1];
+  }
+  return null;
+}
+
+// App-bundle metadata first (it is exact and needs no subprocess); the `kiro`
+// shim on PATH is the fallback that covers a non-stock install location, which
+// otherwise reads as "no IDE installed". `runVersion(executable)` returns the
+// command's combined output text or null, and is injected so tests never spawn.
+function detectKiroIde({ platform, homedir, env, readFile, exists, runVersion }) {
+  const app = detectKiroIdeVersion({ platform, homedir, env, readFile });
+  if (app && app.version) return app;
+
+  const executable = typeof exists === "function" ? findOnPath("kiro", env, exists, platform) : null;
+  if (executable && typeof runVersion === "function") {
+    const version = parseKiroVersionOutput(runVersion(executable));
+    const numeric = parseKiroVersion(version);
+    if (numeric) return { version, parsed: numeric, source: "path", executable };
+  }
+  // Either the "found but unreadable" state or null - never a false negative
+  // downgrade of a bundle we could actually see on disk.
+  return app;
+}
+
+// One-line provenance for messages, so a user can tell which mechanism produced
+// the version they are being told about.
+function describeKiroIdeLocation(ide) {
+  if (!ide) return "";
+  return ide.source === "path"
+    ? `via kiro --version at ${ide.executable}`
+    : `at ${ide.appPath}`;
 }
 
 // Renders the v1 template into a single hook entry with an absolute interceptor
@@ -343,6 +497,25 @@ function checkNodeOnPath(env) {
   return { ok: major >= MIN_NODE_MAJOR, version, major };
 }
 
+// Runs `<kiro> --version` and returns its combined output, or null if the
+// command could not be run. Combined because forks are inconsistent about which
+// stream the version goes to; parseKiroVersionOutput is what makes that safe.
+function runKiroVersionCommand(executable, env) {
+  let result;
+  try {
+    result = spawnSync(executable, ["--version"], {
+      encoding: "utf-8",
+      env,
+      timeout: KIRO_VERSION_TIMEOUT_MS,
+      shell: process.platform === "win32",
+    });
+  } catch {
+    return null;
+  }
+  if (!result || result.error) return null;
+  return `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+}
+
 function resolveServerUrl(env, configPath) {
   const fileConfig = readJsonOrNull(configPath) ?? {};
   return {
@@ -361,6 +534,25 @@ function printV2Warning(ctx, kiroCliPath) {
   ctx.out(`  kiro-cli found at ${kiroCliPath}.`);
   ctx.out("  Sessions started with plain `kiro-cli chat` (V2) bypass this gate entirely.");
   ctx.out("  Run `kiro-cli --v3` for coverage. See README -> Compatibility.");
+}
+
+// The install still proceeds: installing now and upgrading afterwards is a valid
+// order, and the Kiro CLI V3 surface is unaffected by the IDE's version.
+function printKiroIdeVersionWarning(ctx, ide) {
+  ctx.blank();
+  ctx.out("WARNING: this Kiro IDE build cannot load the Denied hook.");
+  ctx.out(`  Detected Kiro IDE ${ide.version} ${describeKiroIdeLocation(ide)}.`);
+  if (compareVersions(ide.parsed, parseKiroVersion(KIRO_IDE_HOOKS_VERSION)) < 0) {
+    ctx.out(`  Builds before ${KIRO_IDE_HOOKS_VERSION} have no v1 PreToolUse hooks system at all,`);
+    ctx.out("  so the hook file is silently ignored and the gate can never fire.");
+  } else {
+    ctx.out(`  Builds before ${MIN_KIRO_IDE_VERSION} do not discover user-level global`);
+    ctx.out("  ~/.kiro/hooks/ (kirodotdev/Kiro#9075), so the globally-registered hook never loads.");
+    ctx.out("  Stopgap: re-run this installer with --workspace=<project> for every workspace -");
+    ctx.out("  workspace-scoped hooks do load on these builds.");
+  }
+  ctx.out(`  Upgrade Kiro IDE to ${MIN_KIRO_IDE_VERSION} or newer: https://kiro.dev/downloads`);
+  ctx.out("  Kiro CLI V3 is unaffected by the IDE version.");
 }
 
 function printRestartInstruction(ctx) {
@@ -384,7 +576,7 @@ function preflight(ctx) {
     hasApiKeyEnv: Boolean(ctx.env.DENIED_API_KEY),
     kiroHome: fs.existsSync(ctx.paths.kiroHome),
     kiroCliPath: findOnPath("kiro-cli", ctx.env, exists),
-    kiroApp: fs.existsSync("/Applications/Kiro.app"),
+    kiroIde: ctx.detectKiroIde(),
   };
 }
 
@@ -397,7 +589,21 @@ function reportPreflight(ctx, pre) {
   );
   ctx.out(`  ~/.kiro present: ${pre.kiroHome ? "yes" : "no"}`);
   ctx.out(`  kiro-cli on PATH: ${pre.kiroCliPath ? pre.kiroCliPath : "no"}`);
-  ctx.out(`  Kiro IDE application: ${pre.kiroApp ? "/Applications/Kiro.app" : "not found"}`);
+  ctx.out(`  Kiro IDE application: ${describeKiroIdePreflight(pre.kiroIde)}`);
+}
+
+// The verdict belongs on the line itself: "1.0.100 (>= 1.0.182 required)" reads
+// as a pass to a hurried user, who then never sees why the gate does not fire.
+function describeKiroIdePreflight(ide) {
+  if (!ide) return "not found";
+  if (!ide.version) {
+    return `found at ${ide.appPath}, but its version could not be determined (verify by hand that it is >= ${MIN_KIRO_IDE_VERSION})`;
+  }
+  const verdict =
+    compareVersions(ide.parsed, parseKiroVersion(MIN_KIRO_IDE_VERSION)) >= 0
+      ? "supported"
+      : `unsupported - need >= ${MIN_KIRO_IDE_VERSION}`;
+  return `${ide.version} ${describeKiroIdeLocation(ide)} (${verdict})`;
 }
 
 async function runInstall(ctx) {
@@ -428,6 +634,13 @@ async function runInstall(ctx) {
   }
   if (pre.kiroCliPath) {
     printV2Warning(ctx, pre.kiroCliPath);
+  }
+  if (
+    pre.kiroIde &&
+    pre.kiroIde.version &&
+    compareVersions(pre.kiroIde.parsed, parseKiroVersion(MIN_KIRO_IDE_VERSION)) < 0
+  ) {
+    printKiroIdeVersionWarning(ctx, pre.kiroIde);
   }
 
   const blockers = [];
@@ -699,6 +912,75 @@ async function runCheck(ctx) {
     node.ok ? `${node.version}` : (node.error ?? `${node.version} is below ${MIN_NODE_MAJOR}`),
   );
 
+  // A hook file the IDE never reads is the exact failure --check exists to
+  // catch: all-PASS while the gate silently allows everything. A *detected* IDE
+  // below the minimum is a proven fail-open condition, so it fails - unless a
+  // workspace hook verified in this same run covers it (see below).
+  //
+  // An *undetected* IDE is deliberately neither PASS nor FAIL: a machine that
+  // only runs Kiro CLI V3 legitimately has no IDE on disk, and failing there
+  // would train users to ignore --check's verdict. It gets a NOTE instead. (The
+  // Kiro CLI versions separately from the IDE, so its version is not gated here.)
+  const ide = ctx.detectKiroIde();
+  // Workspace-scoped hooks *do* load on the 1.0.0-1.0.181 builds - that is the
+  // whole reason --workspace is the documented stopgap there. Failing a
+  // workspace install that this same command told the user to perform would
+  // make --check contradict its own advice, so a verified workspace hook turns
+  // that condition into a pass whose text still says global coverage is absent.
+  const workspaceHookRegistered = results.some(
+    (result) => result.ok && result.label === "hook file (workspace)",
+  );
+  let ideVersionVerified = false;
+  let workspaceOnlyCoverage = false;
+  if (ide && ide.version) {
+    ideVersionVerified = true;
+    const where = describeKiroIdeLocation(ide);
+    if (compareVersions(ide.parsed, parseKiroVersion(KIRO_IDE_HOOKS_VERSION)) < 0) {
+      record(
+        false,
+        "Kiro IDE version",
+        `${ide.version} ${where} predates the v1 PreToolUse hooks system (added in Kiro IDE ${KIRO_IDE_HOOKS_VERSION}) - the hook file is silently ignored and this gate can never fire; upgrade Kiro IDE to ${MIN_KIRO_IDE_VERSION} or newer (https://kiro.dev/downloads)`,
+      );
+    } else if (compareVersions(ide.parsed, parseKiroVersion(MIN_KIRO_IDE_VERSION)) < 0) {
+      workspaceOnlyCoverage = workspaceHookRegistered;
+      record(
+        workspaceHookRegistered,
+        "Kiro IDE version",
+        workspaceHookRegistered
+          ? `${ide.version} ${where} does not discover user-level global ~/.kiro/hooks/ (kirodotdev/Kiro#9075, fixed in ${MIN_KIRO_IDE_VERSION}), but the workspace hook checked above does load on these builds - that workspace is enforced and every other one is not, so re-run the installer with --workspace=<project> for every workspace, or upgrade Kiro IDE for global coverage (https://kiro.dev/downloads)`
+          : `${ide.version} ${where} does not discover user-level global ~/.kiro/hooks/ (kirodotdev/Kiro#9075, fixed in ${MIN_KIRO_IDE_VERSION}) - the globally-registered hook never loads; upgrade Kiro IDE (https://kiro.dev/downloads), or as a stopgap re-run the installer with --workspace=<project> for every workspace (workspace-scoped hooks do load on these builds) and verify it with --check --workspace=<project>`,
+      );
+    } else {
+      record(
+        true,
+        "Kiro IDE version",
+        `${ide.version} ${where} (>= ${MIN_KIRO_IDE_VERSION} required)`,
+      );
+    }
+  } else if (ide && ide.unreadable) {
+    // Not a failure: the IDE is there, but nothing was proven either way, so
+    // certifying a PASS would be a lie and a FAIL would be an unfounded block.
+    ctx.out(
+      `  [WARN] Kiro IDE version: Kiro IDE was found at ${ide.appPath}, but its version could not be determined,`,
+    );
+    ctx.out(
+      `         so compatibility with this gate was not checked. Verify by hand that it is ${MIN_KIRO_IDE_VERSION} or newer`,
+    );
+    ctx.out(
+      "         (Kiro IDE -> About), or upgrade from https://kiro.dev/downloads.",
+    );
+  } else {
+    ctx.out(
+      "  NOTE: Kiro IDE was not found at the known install locations, so its version could not be verified.",
+    );
+    ctx.out(
+      `        This gate requires Kiro IDE ${MIN_KIRO_IDE_VERSION} or newer (global ~/.kiro/hooks/ discovery, kirodotdev/Kiro#9075).`,
+    );
+    ctx.out(
+      "        That is fine on a machine that only uses Kiro CLI V3, which is unaffected by the IDE version.",
+    );
+  }
+
   // A missing key is not advisory: the PDP rejects unauthenticated checks, so
   // the interceptor would fail open on every single tool call.
   const { url, apiKey } = resolveServerUrl(ctx.env, paths.configPath);
@@ -757,7 +1039,26 @@ async function runCheck(ctx) {
   const failed = results.filter((result) => !result.ok);
   ctx.blank();
   if (failed.length === 0) {
-    ctx.out("Result: the gate is registered and every prerequisite is in place.");
+    // "Every prerequisite" must mean every prerequisite. When the IDE version
+    // could not be read, the one condition that catches a silently-ignored hook
+    // file went unverified, and a summary that glosses over that is the same
+    // overclaim --check exists to prevent.
+    if (ideVersionVerified && workspaceOnlyCoverage) {
+      // An all-PASS run on a build that loads no global hook is real, but it is
+      // one workspace wide. Saying so here keeps the headline as narrow as the
+      // guarantee.
+      ctx.out("Result: the gate is registered and every prerequisite is in place - for the");
+      ctx.out("  workspace checked above. This Kiro IDE build loads no global hook, so every other");
+      ctx.out(`  workspace stays unenforced until you install there too or upgrade to ${MIN_KIRO_IDE_VERSION}.`);
+    } else if (ideVersionVerified) {
+      ctx.out("Result: the gate is registered and every prerequisite is in place.");
+    } else {
+      ctx.out("Result: the gate is registered and every prerequisite that could be verified is");
+      ctx.out("  in place - but the Kiro IDE version was not one of them (see above). If you use");
+      ctx.out(`  Kiro IDE on this machine, confirm it is ${MIN_KIRO_IDE_VERSION} or newer by hand (Kiro IDE ->`);
+      ctx.out("  About): an older build accepts the hook file and never fires it. Kiro CLI V3 is");
+      ctx.out("  unaffected by the IDE version.");
+    }
     ctx.out("  This cannot prove a running Kiro IDE has loaded it - hooks register at");
     ctx.out("  startup only, so restart the IDE if you installed while it was open.");
     return 0;
@@ -892,6 +1193,7 @@ async function run(options = {}) {
     opts,
     env: options.env ?? process.env,
     homedir,
+    platform: options.platform ?? process.platform,
     cwd: options.cwd ?? process.cwd(),
     now: options.now ?? Date.now(),
     selfPath: options.selfPath ?? __filename,
@@ -907,6 +1209,25 @@ async function run(options = {}) {
     cwd: ctx.cwd,
     workspace: opts.workspace,
   });
+
+  // Injectable like `fetch`: detection reads absolute system paths (e.g.
+  // /Applications/Kiro.app), which a sandboxed test cannot isolate, so tests
+  // pass either a function or a literal detection result (null included).
+  if (typeof options.detectKiroIde === "function") {
+    ctx.detectKiroIde = options.detectKiroIde;
+  } else if ("detectKiroIde" in options) {
+    ctx.detectKiroIde = () => options.detectKiroIde;
+  } else {
+    ctx.detectKiroIde = () =>
+      detectKiroIde({
+        platform: ctx.platform,
+        homedir: ctx.homedir,
+        env: ctx.env,
+        readFile: readTextOrNull,
+        exists: (candidate) => fs.existsSync(candidate),
+        runVersion: (executable) => runKiroVersionCommand(executable, ctx.env),
+      });
+  }
 
   if (opts.check) return runCheck(ctx);
   if (opts.uninstall) return runUninstall(ctx);
@@ -930,11 +1251,20 @@ module.exports = {
   HOOK_NAME,
   INTERCEPTOR_PLACEHOLDER,
   LEGACY_HOOK_PATTERN,
+  MIN_KIRO_IDE_VERSION,
+  KIRO_IDE_HOOKS_VERSION,
   parseArgs,
   expandHome,
   resolvePaths,
   hashText,
   parseNodeMajor,
+  parseKiroVersion,
+  compareVersions,
+  kiroIdeAppCandidates,
+  detectKiroIdeVersion,
+  detectKiroIde,
+  parseKiroVersionOutput,
+  describeKiroIdeLocation,
   buildHookEntry,
   mergeHookFile,
   removeHookEntry,
